@@ -1,0 +1,11 @@
+raw_data_dir: "./raw_data"
+output_file: "./reports/inventory_risk_report.xlsx"
+
+sales_files:
+  - "202512.xlsx"
+  - "202601.xlsx"
+
+inventory_file: "20260130库存.xlsx"
+
+risk_days_high: 60
+risk_days_low: 45
