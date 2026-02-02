@@ -316,41 +316,6 @@ def main() -> None:
     )
     brand_summary["risk_level"] = brand_summary["turnover_days"].apply(classify)
 
-    # Rename columns to Chinese for output
-    detail_out = detail.rename(columns={
-        "store": "门店名称",
-        "brand": "品牌",
-        "barcode": "商品条码",
-        "product": "商品名称",
-        "avg_sales_qty": "近两月月均销售数量",
-        "inventory_qty": "库存数量",
-        "risk_level": "风险等级",
-        "inventory_sales_ratio": "库存/销售比",
-        "turnover_rate": "库存周转率",
-        "turnover_days": "库存周转天数",
-    })
-    detail_out["商品条码"] = detail_out["商品条码"].astype(str)
-
-    store_summary_out = store_summary.rename(columns={
-        "store": "门店名称",
-        "avg_sales_qty": "近两月月均销售数量",
-        "inventory_qty": "库存数量",
-        "risk_level": "风险等级",
-        "inventory_sales_ratio": "库存/销售比",
-        "turnover_rate": "库存周转率",
-        "turnover_days": "库存周转天数",
-    })
-
-    brand_summary_out = brand_summary.rename(columns={
-        "brand": "品牌",
-        "avg_sales_qty": "近两月月均销售数量",
-        "inventory_qty": "库存数量",
-        "risk_level": "风险等级",
-        "inventory_sales_ratio": "库存/销售比",
-        "turnover_rate": "库存周转率",
-        "turnover_days": "库存周转天数",
-    })
-
     # Missing-in-inventory list: sales with qty but no inventory match
     inv_barcode_keys = set(zip(inv_totals["store"], inv_totals["barcode_key"]))
     inv_fallback_keys = set(zip(inv_totals["store"], inv_totals["brand"], inv_totals["product"]))
@@ -390,6 +355,60 @@ def main() -> None:
         detail = pd.concat([detail, missing_detail], ignore_index=True)
 
     detail = detail.sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
+
+    detail["out_of_stock"] = detail.apply(
+        lambda row: "是" if row["avg_sales_qty"] > 0 and row["inventory_qty"] == 0 else "否",
+        axis=1,
+    )
+
+    # Rename columns to Chinese for output
+    detail_out = detail.rename(columns={
+        "store": "门店名称",
+        "brand": "品牌",
+        "barcode": "商品条码",
+        "product": "商品名称",
+        "avg_sales_qty": "近两月月均销售数量",
+        "inventory_qty": "库存数量",
+        "out_of_stock": "缺货",
+        "risk_level": "风险等级",
+        "inventory_sales_ratio": "库存/销售比",
+        "turnover_rate": "库存周转率",
+        "turnover_days": "库存周转天数",
+    })
+    detail_out["商品条码"] = detail_out["商品条码"].astype(str)
+    detail_out = detail_out[[
+        "门店名称",
+        "品牌",
+        "商品条码",
+        "商品名称",
+        "近两月月均销售数量",
+        "库存数量",
+        "缺货",
+        "风险等级",
+        "库存/销售比",
+        "库存周转率",
+        "库存周转天数",
+    ]]
+
+    store_summary_out = store_summary.rename(columns={
+        "store": "门店名称",
+        "avg_sales_qty": "近两月月均销售数量",
+        "inventory_qty": "库存数量",
+        "risk_level": "风险等级",
+        "inventory_sales_ratio": "库存/销售比",
+        "turnover_rate": "库存周转率",
+        "turnover_days": "库存周转天数",
+    })
+
+    brand_summary_out = brand_summary.rename(columns={
+        "brand": "品牌",
+        "avg_sales_qty": "近两月月均销售数量",
+        "inventory_qty": "库存数量",
+        "risk_level": "风险等级",
+        "inventory_sales_ratio": "库存/销售比",
+        "turnover_rate": "库存周转率",
+        "turnover_days": "库存周转天数",
+    })
 
     missing_out = missing_sales[[
         "store",
