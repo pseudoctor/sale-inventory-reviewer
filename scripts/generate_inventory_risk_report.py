@@ -22,6 +22,7 @@ DEFAULT_CONFIG = {
     "inventory_file": "",
     "risk_days_high": 60,
     "risk_days_low": 45,
+    "brand_keywords": [],
 }
 
 
@@ -103,12 +104,11 @@ def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, st
     barcode_col = find_column(df.columns, ["商品条码", "条码", "商品编码.1", "商品编码", "barcode"])
     qty_col = find_column(df.columns, ["数量", "库存数量", "inventory_qty", "qty"])
 
-    if not all([store_col, brand_col, product_col, barcode_col, qty_col]):
+    if not all([store_col, product_col, barcode_col, qty_col]):
         missing = [
             name
             for name, col in [
                 ("门店名称", store_col),
-                ("品牌", brand_col),
                 ("商品名称", product_col),
                 ("商品条码", barcode_col),
                 ("数量", qty_col),
@@ -120,6 +120,50 @@ def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, st
     df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
 
     return df, store_col, brand_col, product_col, barcode_col, qty_col
+
+
+def extract_brand_from_product(product: Optional[str], brands: List[str]) -> str:
+    if product is None:
+        return "其他"
+    text = str(product)
+    for brand in brands:
+        if brand in text:
+            return brand
+    return "其他"
+
+
+def ensure_inventory_brand_column(path: Path, brands: List[str]) -> None:
+    df = pd.read_excel(path, sheet_name=0)
+    df.columns = df.columns.str.strip()
+    if "品牌" in df.columns:
+        return
+    if "商品名称" not in df.columns:
+        raise ValueError("Inventory file missing 商品名称; cannot derive 品牌 column.")
+    brand_series = df["商品名称"].apply(lambda v: extract_brand_from_product(v, brands))
+    insert_at = list(df.columns).index("商品名称")
+    df.insert(insert_at, "品牌", brand_series)
+    df.to_excel(path, index=False)
+
+
+def extract_inventory_date(df: pd.DataFrame) -> str:
+    df = df.copy()
+    df.columns = df.columns.str.strip()
+
+    date_col = find_column(df.columns, ["库存日期", "日期", "盘点日期", "库存时间", "时间", "inventory_date", "date"])
+    if not date_col:
+        return "未知"
+
+    raw_series = df[date_col]
+    parsed = pd.to_datetime(raw_series, errors="coerce").dropna()
+    if not parsed.empty:
+        date_value = parsed.max().date()
+        return date_value.isoformat()
+
+    non_null = raw_series.dropna()
+    if non_null.empty:
+        return "未知"
+
+    return str(non_null.iloc[0]).strip()
 
 
 def main() -> None:
@@ -136,6 +180,27 @@ def main() -> None:
 
     configured_sales_files = [f for f in config.get("sales_files") or []]
     inventory_file = config.get("inventory_file") or ""
+    brand_keywords = [str(b).strip() for b in (config.get("brand_keywords") or []) if str(b).strip()]
+    if not brand_keywords:
+        brand_keywords = [
+            "伊利",
+            "蒙牛",
+            "南国",
+            "阿宝乐",
+            "畅鲜选",
+            "蜀珑珠",
+            "永璞",
+            "雅士利",
+            "大漠银根",
+            "谷栗村",
+            "君乐宝",
+            "秦俑",
+            "红色拖拉机",
+            "飞鹤",
+            "雀巢",
+            "Seesaw",
+            "佳贝艾特",
+        ]
 
     sales_data = []
     months_loaded: List[str] = []
@@ -202,8 +267,14 @@ def main() -> None:
     if not inv_path.exists():
         raise FileNotFoundError(f"Inventory file not found: {inv_path}")
 
+    ensure_inventory_brand_column(inv_path, brand_keywords)
     inv_df = pd.read_excel(inv_path, sheet_name=0)
+    inventory_date = extract_inventory_date(inv_df)
     inv_df, inv_store, inv_brand, inv_product, inv_barcode, inv_qty = normalize_inventory_df(inv_df)
+    if inv_brand is None:
+        inv_df = inv_df.copy()
+        inv_df["品牌"] = inv_df[inv_product].apply(extract_brand_from_product)
+        inv_brand = "品牌"
     inv_df = inv_df[[inv_store, inv_brand, inv_product, inv_barcode, inv_qty]].copy()
     inv_df.columns = ["store", "brand", "product", "barcode", "inventory_qty"]
     inv_df["barcode"] = inv_df["barcode"].apply(clean_barcode)
@@ -459,15 +530,24 @@ def main() -> None:
     out_of_stock_fill = PatternFill(start_color="7C3AED", end_color="7C3AED", fill_type="solid")
 
     def style_sheet(ws, sheet_name: str):
-        ws.freeze_panes = "C2" if sheet_name == "明细" else "A2"
-        ws.auto_filter.ref = ws.dimensions
-        for cell in ws[1]:
+        ws.insert_rows(1)
+        title = f"库存日期：{inventory_date}"
+        ws.cell(row=1, column=1, value=title)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
+        ws.cell(row=1, column=1).font = Font(bold=True)
+        ws.cell(row=1, column=1).alignment = center
+
+        ws.freeze_panes = "C3" if sheet_name == "明细" else "A3"
+        last_col = ws.max_column
+        last_col_letter = ws.cell(row=2, column=last_col).column_letter
+        ws.auto_filter.ref = f"A2:{last_col_letter}{ws.max_row}"
+        for cell in ws[2]:
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = center
 
         # Auto width based on cell content (with caps for readability)
-        headers = [c.value for c in ws[1]]
+        headers = [c.value for c in ws[2]]
         preferred_widths = {
             "门店名称": 18,
             "品牌": 10,
@@ -483,8 +563,8 @@ def main() -> None:
 
         for col in ws.columns:
             max_len = 0
-            col_letter = col[0].column_letter
-            header = col[0].value
+            col_letter = ws.cell(row=2, column=col[0].column).column_letter
+            header = ws.cell(row=2, column=col[0].column).value
             for cell in col:
                 if cell.value is None:
                     continue
@@ -496,7 +576,7 @@ def main() -> None:
                 ws.column_dimensions[col_letter].width = min(auto_width, 40)
 
         # Align text columns to left, numbers to center
-        for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
             for cell in row:
                 if isinstance(cell.value, (int, float)):
                     cell.alignment = center
@@ -507,14 +587,14 @@ def main() -> None:
         wrap_columns = {"门店名称", "商品名称"}
         for col_idx, header in enumerate(headers, start=1):
             if header in wrap_columns:
-                for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
                     row[col_idx - 1].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
         # Risk color
-        headers = [c.value for c in ws[1]]
+        headers = [c.value for c in ws[2]]
         if "风险等级" in headers:
             risk_idx = headers.index("风险等级") + 1
-            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
                 cell = row[risk_idx - 1]
                 fill = risk_fills.get(cell.value)
                 if fill:
@@ -525,14 +605,14 @@ def main() -> None:
         # Barcode column as text
         if "商品条码" in headers:
             barcode_idx = headers.index("商品条码") + 1
-            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
                 row[barcode_idx - 1].number_format = "@"
 
         # Out-of-stock highlight (avg sales > 0, inventory == 0)
         if "近两月月均销售数量" in headers and "库存数量" in headers:
             avg_idx = headers.index("近两月月均销售数量") + 1
             inv_idx = headers.index("库存数量") + 1
-            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
                 avg_val = row[avg_idx - 1].value or 0
                 inv_val = row[inv_idx - 1].value or 0
                 if avg_val > 0 and inv_val == 0:
@@ -551,7 +631,7 @@ def main() -> None:
         for name, fmt in number_formats.items():
             if name in headers:
                 idx = headers.index(name) + 1
-                for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
                     row[idx - 1].number_format = fmt
 
     for sheet in ["明细", "门店汇总", "品牌汇总", "缺货清单", "汇总"]:
@@ -559,12 +639,12 @@ def main() -> None:
 
     # Merge same store in Detail sheet
     ws_detail = wb["明细"]
-    headers = [c.value for c in ws_detail[1]]
+    headers = [c.value for c in ws_detail[2]]
     if "门店名称" in headers:
         store_idx = headers.index("门店名称") + 1
-        start_row = 2
-        current = ws_detail.cell(row=2, column=store_idx).value
-        for row in range(3, ws_detail.max_row + 2):
+        start_row = 3
+        current = ws_detail.cell(row=3, column=store_idx).value
+        for row in range(4, ws_detail.max_row + 2):
             value = ws_detail.cell(row=row, column=store_idx).value if row <= ws_detail.max_row else None
             if value != current:
                 end_row = row - 1

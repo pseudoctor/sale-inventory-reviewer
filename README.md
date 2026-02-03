@@ -38,3 +38,4 @@ run.bat
 
 ## Configuration
 Edit `config.yaml` to update the sales file list, inventory file, and output path.
+You can also set `brand_keywords` to control how brand names are extracted from inventory product names.
