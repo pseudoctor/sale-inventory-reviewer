@@ -12,7 +12,7 @@ Required columns in sales files:
 
 Required columns in inventory file:
 - `门店名称`, `商品名称`, `商品条码` (or `商品编码`/`商品编码.1`), `数量`
-- If `品牌` is missing, it will be derived from `商品名称` and written back to `raw_data/库存.xlsx`.
+- If `品牌` is missing, it will be derived from `商品名称` in-memory for current run (source file is not modified).
 
 ## Output
 - `reports/inventory_risk_report.xlsx`
@@ -22,7 +22,7 @@ Required columns in inventory file:
   - `缺货清单`: 有销量但库存缺失的 SKU（含建议补货数量）
   - `建议补货清单`: 建议补货数量 > 0 的 SKU
   - `建议调货清单`: 建议调出数量 > 0 的 SKU
-  - `汇总`: 风险等级统计、缺货 SKU 数、库存与日销总量
+  - `汇总`: 风险等级统计、缺货 SKU 数、库存总量、近三月+本月迄今日销总量、近30天日销总量、预测日销总量、窗口数据状态
 
 Each sheet adds a title in row 1: `库存日期：YYYY-MM-DD` (extracted from the inventory file),
 and applies header styling, filters, borders, risk color highlights, and out-of-stock row highlights.
@@ -47,8 +47,12 @@ run.bat
 - `近三月+本月迄今平均日销` = 窗口销量总和 / 窗口有效天数
   - 窗口默认：近三个月完整自然月 + 本月迄今
 - `近30天平均日销售` = 近30天销量总和 / 窗口有效天数
-- `库存周转率` = (`近三月+本月迄今平均日销` * 30) / 库存
-- `库存周转天数` = 库存 / `近三月+本月迄今平均日销`
+- `预测平均日销(季节模式后)`:
+  - `season_mode=false`: `min(近三月+本月迄今平均日销, 近30天平均日销售)`
+  - `season_mode=true`: `max(近三月+本月迄今平均日销, 近30天平均日销售)`
+- `库存周转率` = (`预测平均日销(季节模式后)` * 30) / 库存
+- `库存周转天数` = 库存 / `预测平均日销(季节模式后)`
+- 当任一销售窗口与可用销售日期完全无重叠时，对应窗口日销按 `0` 处理，并在 `汇总` 的 `窗口数据状态` 给出告警。
 - Risk levels by turnover days:
   - 高: > 60 days
   - 中: 45–60 days

@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import math
 import re
 
+import numpy as np
 import pandas as pd
 import yaml
 from openpyxl import load_workbook
@@ -40,27 +40,11 @@ def load_config() -> Dict:
     return config
 
 
-def parse_month_label(filename: str) -> str:
-    match = re.search(r"(\d{4})(\d{2})", filename)
-    if match:
-        return f"{match.group(1)}-{match.group(2)}"
-    return Path(filename).stem
-
-
 def extract_month_key(filename: str) -> Optional[int]:
     match = re.search(r"(\d{4})(\d{2})", filename)
     if not match:
         return None
     return int(match.group(1) + match.group(2))
-
-
-def clean_barcode(value) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if text == "" or text.lower() in {"nan", "none"}:
-        return None
-    return text
 
 
 def find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
@@ -112,8 +96,29 @@ def overlap_days(
     overlap_start = max(start_date, data_min_date)
     overlap_end = min(end_date, data_max_date)
     if overlap_start > overlap_end:
-        return 1
+        return 0
     return (overlap_end - overlap_start).days + 1
+
+
+def combine_daily_sales(
+    daily_sales_3m_mtd: pd.Series,
+    daily_sales_30d: pd.Series,
+    use_peak_mode: bool,
+) -> pd.Series:
+    if use_peak_mode:
+        return pd.concat([daily_sales_3m_mtd, daily_sales_30d], axis=1).max(axis=1)
+    return pd.concat([daily_sales_3m_mtd, daily_sales_30d], axis=1).min(axis=1)
+
+
+def classify_risk_levels(turnover_days: pd.Series, low_days: float, high_days: float) -> pd.Series:
+    return pd.Series(
+        np.select(
+            [turnover_days > high_days, turnover_days < low_days],
+            ["高", "低"],
+            default="中",
+        ),
+        index=turnover_days.index,
+    )
 
 
 def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str, str]:
@@ -144,6 +149,24 @@ def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, st
     return df, store_col, brand_col, product_col, barcode_col, qty_col
 
 
+def normalize_barcode_value(value) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, float):
+        if pd.isna(value):
+            return None
+        return format(value, ".0f")
+    if isinstance(value, int):
+        return str(value)
+    text = str(value).strip()
+    if text == "" or text.lower() in {"nan", "none"}:
+        return None
+    # Normalize common spreadsheet artifacts such as "6907...0.0"
+    if re.fullmatch(r"\d+\.0+", text):
+        return text.split(".", 1)[0]
+    return text
+
+
 def extract_brand_from_product(product: Optional[str], brands: List[str]) -> str:
     if product is None:
         return "其他"
@@ -154,17 +177,17 @@ def extract_brand_from_product(product: Optional[str], brands: List[str]) -> str
     return "其他"
 
 
-def ensure_inventory_brand_column(path: Path, brands: List[str]) -> None:
-    df = pd.read_excel(path, sheet_name=0)
+def ensure_inventory_brand_column(df: pd.DataFrame, brands: List[str]) -> pd.DataFrame:
+    df = df.copy()
     df.columns = df.columns.str.strip()
     if "品牌" in df.columns:
-        return
+        return df
     if "商品名称" not in df.columns:
         raise ValueError("Inventory file missing 商品名称; cannot derive 品牌 column.")
     brand_series = df["商品名称"].apply(lambda v: extract_brand_from_product(v, brands))
     insert_at = list(df.columns).index("商品名称")
     df.insert(insert_at, "品牌", brand_series)
-    df.to_excel(path, index=False)
+    return df
 
 
 def extract_inventory_date(df: pd.DataFrame) -> str:
@@ -244,8 +267,8 @@ def main() -> None:
     if not inv_path.exists():
         raise FileNotFoundError(f"Inventory file not found: {inv_path}")
 
-    ensure_inventory_brand_column(inv_path, brand_keywords)
-    inv_df = pd.read_excel(inv_path, sheet_name=0)
+    inv_df = pd.read_excel(inv_path, sheet_name=0, dtype=str)
+    inv_df = ensure_inventory_brand_column(inv_df, brand_keywords)
     inventory_date_text = extract_inventory_date(inv_df)
     parsed_inventory_date = pd.to_datetime(inventory_date_text, errors="coerce")
     if pd.isna(parsed_inventory_date):
@@ -259,7 +282,7 @@ def main() -> None:
         inv_brand = "品牌"
     inv_df = inv_df[[inv_store, inv_brand, inv_product, inv_barcode, inv_qty]].copy()
     inv_df.columns = ["store", "brand", "product", "barcode", "inventory_qty"]
-    inv_df["barcode"] = inv_df["barcode"].apply(clean_barcode)
+    inv_df["barcode"] = inv_df["barcode"].apply(normalize_barcode_value)
 
     sales_data = []
     for _, filepath in sales_candidates:
@@ -268,12 +291,11 @@ def main() -> None:
         if not filepath.exists():
             print(f"Warning: missing sales file {filepath}")
             continue
-        df = pd.read_excel(filepath, sheet_name=0)
+        df = pd.read_excel(filepath, sheet_name=0, dtype=str)
         df, store_col, brand_col, product_col, barcode_col, qty_col, date_col = normalize_sales_df(df)
-        month_label = parse_month_label(filename)
         df = df[[store_col, brand_col, product_col, barcode_col, qty_col, date_col]].copy()
         df.columns = ["store", "brand", "product", "barcode", "sales_qty", "sales_date"]
-        df["month"] = month_label
+        df["barcode"] = df["barcode"].apply(normalize_barcode_value)
         sales_data.append(df)
 
     if not sales_data:
@@ -306,11 +328,15 @@ def main() -> None:
 
     sales_df["sales_date"] = pd.to_datetime(sales_df["sales_date"], errors="coerce")
     sales_df = sales_df[sales_df["sales_date"].notna()].copy()
+    if sales_df.empty:
+        raise ValueError("Sales data has no valid dates after parsing 销售时间.")
 
     data_min_date = sales_df["sales_date"].min().normalize()
     data_max_date = sales_df["sales_date"].max().normalize()
     mtd_days = overlap_days(mtd_start, mtd_end, data_min_date, data_max_date)
     recent_days_effective = overlap_days(recent_start, inventory_date_ts, data_min_date, data_max_date)
+    has_mtd_window_data = mtd_days > 0
+    has_recent_window_data = recent_days_effective > 0
 
     sales_mtd = sales_df[(sales_df["sales_date"] >= mtd_start) & (sales_df["sales_date"] <= mtd_end)]
     sales_30d = sales_df[(sales_df["sales_date"] >= recent_start) & (sales_df["sales_date"] <= inventory_date_ts)]
@@ -334,19 +360,24 @@ def main() -> None:
     sales_totals = sales_totals.merge(daily_30d, on=["store", "brand", "product", "barcode"], how="left")
     sales_totals["sales_qty_3m_mtd"] = sales_totals["sales_qty_3m_mtd"].fillna(0)
     sales_totals["sales_qty_30d"] = sales_totals["sales_qty_30d"].fillna(0)
-    sales_totals["daily_sales_3m_mtd"] = sales_totals["sales_qty_3m_mtd"] / mtd_days
-    sales_totals["daily_sales_30d"] = sales_totals["sales_qty_30d"] / recent_days_effective
-    if use_peak_mode:
-        sales_totals["forecast_daily_sales"] = sales_totals[["daily_sales_3m_mtd", "daily_sales_30d"]].max(axis=1)
-    else:
-        sales_totals["forecast_daily_sales"] = sales_totals[["daily_sales_3m_mtd", "daily_sales_30d"]].min(axis=1)
-    sales_totals["barcode_key"] = sales_totals["barcode"].apply(clean_barcode)
+    sales_totals["daily_sales_3m_mtd"] = (
+        sales_totals["sales_qty_3m_mtd"] / mtd_days if has_mtd_window_data else 0
+    )
+    sales_totals["daily_sales_30d"] = (
+        sales_totals["sales_qty_30d"] / recent_days_effective if has_recent_window_data else 0
+    )
+    sales_totals["forecast_daily_sales"] = combine_daily_sales(
+        sales_totals["daily_sales_3m_mtd"],
+        sales_totals["daily_sales_30d"],
+        use_peak_mode,
+    )
+    sales_totals["barcode_key"] = sales_totals["barcode"].apply(normalize_barcode_value)
 
     inv_totals = (
         inv_df.groupby(["store", "brand", "product", "barcode"], as_index=False)["inventory_qty"]
         .sum()
     )
-    inv_totals["barcode_key"] = inv_totals["barcode"].apply(clean_barcode)
+    inv_totals["barcode_key"] = inv_totals["barcode"].apply(normalize_barcode_value)
 
     # Match sales to inventory: barcode match first, fallback to store+brand+product
     sales_barcode = sales_totals[sales_totals["barcode_key"].notna()].copy()
@@ -380,30 +411,26 @@ def main() -> None:
     detail["daily_sales_30d"] = detail["daily_sales_30d"].fillna(0)
     detail["forecast_daily_sales"] = detail["forecast_daily_sales"].fillna(0)
 
-    detail["inventory_sales_ratio"] = detail.apply(
-        lambda row: row["inventory_qty"] / row["forecast_daily_sales"] if row["forecast_daily_sales"] > 0 else float("inf"),
-        axis=1,
+    detail["inventory_sales_ratio"] = np.where(
+        detail["forecast_daily_sales"] > 0,
+        detail["inventory_qty"] / detail["forecast_daily_sales"],
+        float("inf"),
     )
-    detail["turnover_rate"] = detail.apply(
-        lambda row: (row["forecast_daily_sales"] * 30) / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
-        axis=1,
+    detail["turnover_rate"] = np.where(
+        detail["inventory_qty"] > 0,
+        (detail["forecast_daily_sales"] * 30) / detail["inventory_qty"],
+        0,
     )
-    detail["turnover_days"] = detail.apply(
-        lambda row: round(row["inventory_qty"] / row["forecast_daily_sales"]) if row["forecast_daily_sales"] > 0 else float("inf"),
-        axis=1,
+    detail["turnover_days"] = np.where(
+        detail["forecast_daily_sales"] > 0,
+        np.round(detail["inventory_qty"] / detail["forecast_daily_sales"]),
+        float("inf"),
     )
 
     high_days = float(config.get("risk_days_high", 60))
     low_days = float(config.get("risk_days_low", 45))
 
-    def classify(days: float) -> str:
-        if days > high_days:
-            return "高"
-        if days < low_days:
-            return "低"
-        return "中"
-
-    detail["risk_level"] = detail["turnover_days"].apply(classify)
+    detail["risk_level"] = classify_risk_levels(detail["turnover_days"], low_days, high_days)
     
     detail = detail[[
         "store",
@@ -426,41 +453,49 @@ def main() -> None:
     store_summary = detail.groupby("store", as_index=False).agg({
         "daily_sales_3m_mtd": "sum",
         "daily_sales_30d": "sum",
+        "forecast_daily_sales": "sum",
         "inventory_qty": "sum",
     })
-    store_summary["inventory_sales_ratio"] = store_summary.apply(
-        lambda row: row["inventory_qty"] / row["daily_sales_3m_mtd"] if row["daily_sales_3m_mtd"] > 0 else float("inf"),
-        axis=1,
+    store_summary["inventory_sales_ratio"] = np.where(
+        store_summary["forecast_daily_sales"] > 0,
+        store_summary["inventory_qty"] / store_summary["forecast_daily_sales"],
+        float("inf"),
     )
-    store_summary["turnover_rate"] = store_summary.apply(
-        lambda row: (row["daily_sales_3m_mtd"] * 30) / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
-        axis=1,
+    store_summary["turnover_rate"] = np.where(
+        store_summary["inventory_qty"] > 0,
+        (store_summary["forecast_daily_sales"] * 30) / store_summary["inventory_qty"],
+        0,
     )
-    store_summary["turnover_days"] = store_summary.apply(
-        lambda row: round(row["inventory_qty"] / row["daily_sales_3m_mtd"]) if row["daily_sales_3m_mtd"] > 0 else float("inf"),
-        axis=1,
+    store_summary["turnover_days"] = np.where(
+        store_summary["forecast_daily_sales"] > 0,
+        np.round(store_summary["inventory_qty"] / store_summary["forecast_daily_sales"]),
+        float("inf"),
     )
-    store_summary["risk_level"] = store_summary["turnover_days"].apply(classify)
+    store_summary["risk_level"] = classify_risk_levels(store_summary["turnover_days"], low_days, high_days)
 
     # Brand summary
     brand_summary = detail.groupby("brand", as_index=False).agg({
         "daily_sales_3m_mtd": "sum",
         "daily_sales_30d": "sum",
+        "forecast_daily_sales": "sum",
         "inventory_qty": "sum",
     })
-    brand_summary["inventory_sales_ratio"] = brand_summary.apply(
-        lambda row: row["inventory_qty"] / row["daily_sales_3m_mtd"] if row["daily_sales_3m_mtd"] > 0 else float("inf"),
-        axis=1,
+    brand_summary["inventory_sales_ratio"] = np.where(
+        brand_summary["forecast_daily_sales"] > 0,
+        brand_summary["inventory_qty"] / brand_summary["forecast_daily_sales"],
+        float("inf"),
     )
-    brand_summary["turnover_rate"] = brand_summary.apply(
-        lambda row: (row["daily_sales_3m_mtd"] * 30) / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
-        axis=1,
+    brand_summary["turnover_rate"] = np.where(
+        brand_summary["inventory_qty"] > 0,
+        (brand_summary["forecast_daily_sales"] * 30) / brand_summary["inventory_qty"],
+        0,
     )
-    brand_summary["turnover_days"] = brand_summary.apply(
-        lambda row: round(row["inventory_qty"] / row["daily_sales_3m_mtd"]) if row["daily_sales_3m_mtd"] > 0 else float("inf"),
-        axis=1,
+    brand_summary["turnover_days"] = np.where(
+        brand_summary["forecast_daily_sales"] > 0,
+        np.round(brand_summary["inventory_qty"] / brand_summary["forecast_daily_sales"]),
+        float("inf"),
     )
-    brand_summary["risk_level"] = brand_summary["turnover_days"].apply(classify)
+    brand_summary["risk_level"] = classify_risk_levels(brand_summary["turnover_days"], low_days, high_days)
 
     # Missing-in-inventory list: sales with qty but no inventory match
     inv_barcode_keys = set(zip(inv_totals["store"], inv_totals["barcode_key"]))
@@ -504,32 +539,30 @@ def main() -> None:
 
     detail = detail.sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
 
-    detail["out_of_stock"] = detail.apply(
-        lambda row: "是" if row["forecast_daily_sales"] > 0 and row["inventory_qty"] == 0 else "否",
-        axis=1,
+    detail["out_of_stock"] = np.where(
+        (detail["forecast_daily_sales"] > 0) & (detail["inventory_qty"] == 0),
+        "是",
+        "否",
     )
 
     # Suggested outbound/replenishment quantities (store-SKU only, no lane matching)
     detail["daily_demand"] = detail["forecast_daily_sales"]
     detail["low_target_qty"] = detail["daily_demand"] * low_days
     detail["high_keep_qty"] = detail["daily_demand"] * high_days
-    detail["need_qty"] = detail.apply(
-        lambda row: math.ceil(max(0, row["low_target_qty"] - row["inventory_qty"]))
-        if row["forecast_daily_sales"] > 0
-        else 0,
-        axis=1,
+    detail["need_qty"] = np.where(
+        detail["forecast_daily_sales"] > 0,
+        np.ceil(np.maximum(0, detail["low_target_qty"] - detail["inventory_qty"])),
+        0,
     )
-    detail["suggest_outbound_qty"] = detail.apply(
-        lambda row: math.floor(max(0, row["inventory_qty"] - row["high_keep_qty"]))
-        if row["risk_level"] == "高" and row["forecast_daily_sales"] > 0
-        else 0,
-        axis=1,
+    detail["suggest_outbound_qty"] = np.where(
+        (detail["risk_level"] == "高") & (detail["forecast_daily_sales"] > 0),
+        np.floor(np.maximum(0, detail["inventory_qty"] - detail["high_keep_qty"])),
+        0,
     )
-    detail["suggest_replenish_qty"] = detail.apply(
-        lambda row: row["need_qty"]
-        if (row["risk_level"] == "低" or row["out_of_stock"] == "是")
-        else 0,
-        axis=1,
+    detail["suggest_replenish_qty"] = np.where(
+        (detail["risk_level"] == "低") | (detail["out_of_stock"] == "是"),
+        detail["need_qty"],
+        0,
     )
     detail["suggest_outbound_qty"] = detail["suggest_outbound_qty"].astype(int)
     detail["suggest_replenish_qty"] = detail["suggest_replenish_qty"].astype(int)
@@ -573,6 +606,7 @@ def main() -> None:
         "store": "门店名称",
         "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
         "daily_sales_30d": "近30天平均日销售",
+        "forecast_daily_sales": "预测平均日销(季节模式后)",
         "inventory_qty": "库存数量",
         "risk_level": "风险等级",
         "inventory_sales_ratio": "库存/销售比",
@@ -583,6 +617,7 @@ def main() -> None:
         "门店名称",
         "近三月+本月迄今平均日销",
         "近30天平均日销售",
+        "预测平均日销(季节模式后)",
         "库存数量",
         "库存/销售比",
         "库存周转率",
@@ -594,6 +629,7 @@ def main() -> None:
         "brand": "品牌",
         "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
         "daily_sales_30d": "近30天平均日销售",
+        "forecast_daily_sales": "预测平均日销(季节模式后)",
         "inventory_qty": "库存数量",
         "risk_level": "风险等级",
         "inventory_sales_ratio": "库存/销售比",
@@ -604,6 +640,7 @@ def main() -> None:
         "品牌",
         "近三月+本月迄今平均日销",
         "近30天平均日销售",
+        "预测平均日销(季节模式后)",
         "库存数量",
         "库存/销售比",
         "库存周转率",
@@ -697,6 +734,14 @@ def main() -> None:
         ["缺货/库存缺失SKU数", int(len(missing_out))],
         ["库存总量", float(detail_out["库存数量"].sum())],
         ["近三月+本月迄今平均日销总量", float(detail_out["近三月+本月迄今平均日销"].sum())],
+        ["近30天平均日销售总量", float(detail_out["近30天平均日销售"].sum())],
+        ["预测平均日销总量(季节模式后)", float(detail["forecast_daily_sales"].sum())],
+        ["季节模式", "旺季(取高值)" if use_peak_mode else "淡季(取低值)"],
+        [
+            "窗口数据状态",
+            "正常" if (has_mtd_window_data and has_recent_window_data)
+            else f"警告: 3M+MTD有效={has_mtd_window_data}, 30天有效={has_recent_window_data}",
+        ],
     ]
     summary_out = pd.DataFrame(summary_rows, columns=["指标", "数值"])
 
