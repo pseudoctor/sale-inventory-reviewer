@@ -2,6 +2,7 @@ raw_data_dir: "./raw_data"
 output_file: "./reports/inventory_risk_report.xlsx"
 
 sales_files:
+  - "202511.xlsx"
   - "202512.xlsx"
   - "202601.xlsx"
 
@@ -9,6 +10,10 @@ inventory_file: "库存.xlsx"
 
 risk_days_high: 60
 risk_days_low: 45
+sales_window_full_months: 3
+sales_window_include_mtd: true
+sales_window_recent_days: 30
+season_mode: true # false: 淡季取低(min), true: 旺季取高(max)
 
 brand_keywords:
   - "伊利"

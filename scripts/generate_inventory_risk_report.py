@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Generate inventory risk Excel report from last two months of sales and inventory data."""
+"""Generate inventory risk Excel report from windowed daily sales and inventory data."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import math
 import re
 
 import pandas as pd
@@ -22,6 +23,10 @@ DEFAULT_CONFIG = {
     "inventory_file": "",
     "risk_days_high": 60,
     "risk_days_low": 45,
+    "sales_window_full_months": 3,
+    "sales_window_include_mtd": True,
+    "sales_window_recent_days": 30,
+    "season_mode": False,
     "brand_keywords": [],
 }
 
@@ -65,7 +70,7 @@ def find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
     return None
 
 
-def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str]:
+def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str, str]:
     df = df.copy()
     df.columns = df.columns.str.strip()
 
@@ -74,8 +79,9 @@ def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, s
     product_col = find_column(df.columns, ["商品名称", "商品", "product"])
     barcode_col = find_column(df.columns, ["商品条码", "条码", "商品编码.1", "商品编码", "barcode"])
     qty_col = find_column(df.columns, ["销售数量", "数量", "sales_qty", "qty"])
+    date_col = find_column(df.columns, ["销售时间", "日期", "date", "sales_date"])
 
-    if not all([store_col, brand_col, product_col, barcode_col, qty_col]):
+    if not all([store_col, brand_col, product_col, barcode_col, qty_col, date_col]):
         missing = [
             name
             for name, col in [
@@ -84,14 +90,30 @@ def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, s
                 ("商品名称", product_col),
                 ("商品条码", barcode_col),
                 ("销售数量", qty_col),
+                ("销售时间", date_col),
             ]
             if col is None
         ]
         raise ValueError(f"Missing required sales columns: {', '.join(missing)}")
 
     df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df = df[df[date_col].notna()].copy()
 
-    return df, store_col, brand_col, product_col, barcode_col, qty_col
+    return df, store_col, brand_col, product_col, barcode_col, qty_col, date_col
+
+
+def overlap_days(
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    data_min_date: pd.Timestamp,
+    data_max_date: pd.Timestamp,
+) -> int:
+    overlap_start = max(start_date, data_min_date)
+    overlap_end = min(end_date, data_max_date)
+    if overlap_start > overlap_end:
+        return 1
+    return (overlap_end - overlap_start).days + 1
 
 
 def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str, str]:
@@ -202,10 +224,7 @@ def main() -> None:
             "佳贝艾特",
         ]
 
-    sales_data = []
-    months_loaded: List[str] = []
-
-    # Auto-detect sales files and pick latest two months
+    # Auto-detect sales files by YYYYMM and keep all available for window calculations
     if configured_sales_files:
         candidate_files = [raw_data_dir / f for f in configured_sales_files]
     else:
@@ -219,48 +238,6 @@ def main() -> None:
         sales_candidates.append((month_key, path))
 
     sales_candidates.sort(key=lambda x: x[0])
-    recent_candidates = sales_candidates[-2:] if len(sales_candidates) >= 2 else sales_candidates
-
-    for _, filepath in recent_candidates:
-        filename = filepath.name
-        filepath = raw_data_dir / filename
-        if not filepath.exists():
-            print(f"Warning: missing sales file {filepath}")
-            continue
-        df = pd.read_excel(filepath, sheet_name=0)
-        df, store_col, brand_col, product_col, barcode_col, qty_col = normalize_sales_df(df)
-        month_label = parse_month_label(filename)
-        df = df[[store_col, brand_col, product_col, barcode_col, qty_col]].copy()
-        df.columns = ["store", "brand", "product", "barcode", "sales_qty"]
-        df["month"] = month_label
-        sales_data.append(df)
-        months_loaded.append(month_label)
-
-    if not sales_data:
-        raise FileNotFoundError("No sales files were loaded.")
-
-    sales_df = pd.concat(sales_data, ignore_index=True)
-
-    # Use last two months from sorted file detection
-    available_months = [m for m in months_loaded if m]
-    recent_months = available_months[-2:] if len(available_months) >= 2 else available_months
-    if not recent_months:
-        raise ValueError("No recent months available for calculation.")
-
-    recent_sales = sales_df[sales_df["month"].isin(recent_months)]
-    monthly_sales = (
-        recent_sales.groupby(["month", "store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
-        .sum()
-    )
-
-    months_count = len(recent_months)
-    sales_totals = (
-        monthly_sales.groupby(["store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
-        .sum()
-        .rename(columns={"sales_qty": "sales_qty_total"})
-    )
-    sales_totals["avg_sales_qty"] = sales_totals["sales_qty_total"] / months_count
-    sales_totals["barcode_key"] = sales_totals["barcode"].apply(clean_barcode)
 
     # Inventory data
     inv_path = raw_data_dir / inventory_file
@@ -269,15 +246,101 @@ def main() -> None:
 
     ensure_inventory_brand_column(inv_path, brand_keywords)
     inv_df = pd.read_excel(inv_path, sheet_name=0)
-    inventory_date = extract_inventory_date(inv_df)
+    inventory_date_text = extract_inventory_date(inv_df)
+    parsed_inventory_date = pd.to_datetime(inventory_date_text, errors="coerce")
+    if pd.isna(parsed_inventory_date):
+        raise ValueError(f"Invalid inventory date: {inventory_date_text}")
+    inventory_date_ts = pd.Timestamp(parsed_inventory_date).normalize()
+    inventory_date = inventory_date_ts.date().isoformat()
     inv_df, inv_store, inv_brand, inv_product, inv_barcode, inv_qty = normalize_inventory_df(inv_df)
     if inv_brand is None:
         inv_df = inv_df.copy()
-        inv_df["品牌"] = inv_df[inv_product].apply(extract_brand_from_product)
+        inv_df["品牌"] = inv_df[inv_product].apply(lambda v: extract_brand_from_product(v, brand_keywords))
         inv_brand = "品牌"
     inv_df = inv_df[[inv_store, inv_brand, inv_product, inv_barcode, inv_qty]].copy()
     inv_df.columns = ["store", "brand", "product", "barcode", "inventory_qty"]
     inv_df["barcode"] = inv_df["barcode"].apply(clean_barcode)
+
+    sales_data = []
+    for _, filepath in sales_candidates:
+        filename = filepath.name
+        filepath = raw_data_dir / filename
+        if not filepath.exists():
+            print(f"Warning: missing sales file {filepath}")
+            continue
+        df = pd.read_excel(filepath, sheet_name=0)
+        df, store_col, brand_col, product_col, barcode_col, qty_col, date_col = normalize_sales_df(df)
+        month_label = parse_month_label(filename)
+        df = df[[store_col, brand_col, product_col, barcode_col, qty_col, date_col]].copy()
+        df.columns = ["store", "brand", "product", "barcode", "sales_qty", "sales_date"]
+        df["month"] = month_label
+        sales_data.append(df)
+
+    if not sales_data:
+        raise FileNotFoundError("No sales files were loaded.")
+
+    sales_df = pd.concat(sales_data, ignore_index=True)
+
+    full_months = int(config.get("sales_window_full_months", 3))
+    include_mtd = bool(config.get("sales_window_include_mtd", True))
+    recent_days = int(config.get("sales_window_recent_days", 30))
+    season_mode_raw = config.get("season_mode", False)
+    if isinstance(season_mode_raw, bool):
+        use_peak_mode = season_mode_raw
+    else:
+        mode_text = str(season_mode_raw).strip().lower()
+        if mode_text in {"true", "peak"}:
+            use_peak_mode = True
+        elif mode_text in {"false", "off_peak"}:
+            use_peak_mode = False
+        else:
+            raise ValueError("season_mode must be true/false (or legacy peak/off_peak)")
+    if full_months < 0:
+        raise ValueError("sales_window_full_months must be >= 0")
+    if recent_days <= 0:
+        raise ValueError("sales_window_recent_days must be > 0")
+
+    mtd_end = inventory_date_ts if include_mtd else (inventory_date_ts.replace(day=1) - pd.Timedelta(days=1))
+    mtd_start = (inventory_date_ts.replace(day=1) - pd.DateOffset(months=full_months)).normalize()
+    recent_start = (inventory_date_ts - pd.Timedelta(days=recent_days - 1)).normalize()
+
+    sales_df["sales_date"] = pd.to_datetime(sales_df["sales_date"], errors="coerce")
+    sales_df = sales_df[sales_df["sales_date"].notna()].copy()
+
+    data_min_date = sales_df["sales_date"].min().normalize()
+    data_max_date = sales_df["sales_date"].max().normalize()
+    mtd_days = overlap_days(mtd_start, mtd_end, data_min_date, data_max_date)
+    recent_days_effective = overlap_days(recent_start, inventory_date_ts, data_min_date, data_max_date)
+
+    sales_mtd = sales_df[(sales_df["sales_date"] >= mtd_start) & (sales_df["sales_date"] <= mtd_end)]
+    sales_30d = sales_df[(sales_df["sales_date"] >= recent_start) & (sales_df["sales_date"] <= inventory_date_ts)]
+
+    sales_totals = (
+        sales_df.groupby(["store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
+        .sum()
+        .rename(columns={"sales_qty": "sales_qty_total"})
+    )
+    daily_3m_mtd = (
+        sales_mtd.groupby(["store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
+        .sum()
+        .rename(columns={"sales_qty": "sales_qty_3m_mtd"})
+    )
+    daily_30d = (
+        sales_30d.groupby(["store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
+        .sum()
+        .rename(columns={"sales_qty": "sales_qty_30d"})
+    )
+    sales_totals = sales_totals.merge(daily_3m_mtd, on=["store", "brand", "product", "barcode"], how="left")
+    sales_totals = sales_totals.merge(daily_30d, on=["store", "brand", "product", "barcode"], how="left")
+    sales_totals["sales_qty_3m_mtd"] = sales_totals["sales_qty_3m_mtd"].fillna(0)
+    sales_totals["sales_qty_30d"] = sales_totals["sales_qty_30d"].fillna(0)
+    sales_totals["daily_sales_3m_mtd"] = sales_totals["sales_qty_3m_mtd"] / mtd_days
+    sales_totals["daily_sales_30d"] = sales_totals["sales_qty_30d"] / recent_days_effective
+    if use_peak_mode:
+        sales_totals["forecast_daily_sales"] = sales_totals[["daily_sales_3m_mtd", "daily_sales_30d"]].max(axis=1)
+    else:
+        sales_totals["forecast_daily_sales"] = sales_totals[["daily_sales_3m_mtd", "daily_sales_30d"]].min(axis=1)
+    sales_totals["barcode_key"] = sales_totals["barcode"].apply(clean_barcode)
 
     inv_totals = (
         inv_df.groupby(["store", "brand", "product", "barcode"], as_index=False)["inventory_qty"]
@@ -291,13 +354,17 @@ def main() -> None:
 
     detail = inv_totals.copy()
     detail = detail.merge(
-        sales_barcode[["store", "barcode_key", "avg_sales_qty"]],
+        sales_barcode[["store", "barcode_key", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales"]],
         on=["store", "barcode_key"],
         how="left",
     )
 
-    fallback_sales = sales_totals.groupby(["store", "brand", "product"], as_index=False)["avg_sales_qty"].sum()
-    missing_mask = detail["avg_sales_qty"].isna()
+    fallback_sales = sales_totals.groupby(["store", "brand", "product"], as_index=False).agg({
+        "daily_sales_3m_mtd": "sum",
+        "daily_sales_30d": "sum",
+        "forecast_daily_sales": "sum",
+    })
+    missing_mask = detail["forecast_daily_sales"].isna()
     if missing_mask.any():
         fallback = detail.loc[missing_mask].merge(
             fallback_sales,
@@ -305,20 +372,24 @@ def main() -> None:
             how="left",
             suffixes=("", "_fallback"),
         )
-        detail.loc[missing_mask, "avg_sales_qty"] = fallback["avg_sales_qty_fallback"].values
+        detail.loc[missing_mask, "daily_sales_3m_mtd"] = fallback["daily_sales_3m_mtd_fallback"].values
+        detail.loc[missing_mask, "daily_sales_30d"] = fallback["daily_sales_30d_fallback"].values
+        detail.loc[missing_mask, "forecast_daily_sales"] = fallback["forecast_daily_sales_fallback"].values
 
-    detail["avg_sales_qty"] = detail["avg_sales_qty"].fillna(0)
+    detail["daily_sales_3m_mtd"] = detail["daily_sales_3m_mtd"].fillna(0)
+    detail["daily_sales_30d"] = detail["daily_sales_30d"].fillna(0)
+    detail["forecast_daily_sales"] = detail["forecast_daily_sales"].fillna(0)
 
     detail["inventory_sales_ratio"] = detail.apply(
-        lambda row: row["inventory_qty"] / row["avg_sales_qty"] if row["avg_sales_qty"] > 0 else float("inf"),
+        lambda row: row["inventory_qty"] / row["forecast_daily_sales"] if row["forecast_daily_sales"] > 0 else float("inf"),
         axis=1,
     )
     detail["turnover_rate"] = detail.apply(
-        lambda row: row["avg_sales_qty"] / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
+        lambda row: (row["forecast_daily_sales"] * 30) / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
         axis=1,
     )
     detail["turnover_days"] = detail.apply(
-        lambda row: round(30 / row["turnover_rate"]) if row["turnover_rate"] > 0 else float("inf"),
+        lambda row: round(row["inventory_qty"] / row["forecast_daily_sales"]) if row["forecast_daily_sales"] > 0 else float("inf"),
         axis=1,
     )
 
@@ -339,7 +410,9 @@ def main() -> None:
         "brand",
         "barcode",
         "product",
-        "avg_sales_qty",
+        "daily_sales_3m_mtd",
+        "daily_sales_30d",
+        "forecast_daily_sales",
         "inventory_qty",
         "risk_level",
         "inventory_sales_ratio",
@@ -351,38 +424,40 @@ def main() -> None:
 
     # Store summary
     store_summary = detail.groupby("store", as_index=False).agg({
-        "avg_sales_qty": "sum",
+        "daily_sales_3m_mtd": "sum",
+        "daily_sales_30d": "sum",
         "inventory_qty": "sum",
     })
     store_summary["inventory_sales_ratio"] = store_summary.apply(
-        lambda row: row["inventory_qty"] / row["avg_sales_qty"] if row["avg_sales_qty"] > 0 else float("inf"),
+        lambda row: row["inventory_qty"] / row["daily_sales_3m_mtd"] if row["daily_sales_3m_mtd"] > 0 else float("inf"),
         axis=1,
     )
     store_summary["turnover_rate"] = store_summary.apply(
-        lambda row: row["avg_sales_qty"] / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
+        lambda row: (row["daily_sales_3m_mtd"] * 30) / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
         axis=1,
     )
     store_summary["turnover_days"] = store_summary.apply(
-        lambda row: round(30 / row["turnover_rate"]) if row["turnover_rate"] > 0 else float("inf"),
+        lambda row: round(row["inventory_qty"] / row["daily_sales_3m_mtd"]) if row["daily_sales_3m_mtd"] > 0 else float("inf"),
         axis=1,
     )
     store_summary["risk_level"] = store_summary["turnover_days"].apply(classify)
 
     # Brand summary
     brand_summary = detail.groupby("brand", as_index=False).agg({
-        "avg_sales_qty": "sum",
+        "daily_sales_3m_mtd": "sum",
+        "daily_sales_30d": "sum",
         "inventory_qty": "sum",
     })
     brand_summary["inventory_sales_ratio"] = brand_summary.apply(
-        lambda row: row["inventory_qty"] / row["avg_sales_qty"] if row["avg_sales_qty"] > 0 else float("inf"),
+        lambda row: row["inventory_qty"] / row["daily_sales_3m_mtd"] if row["daily_sales_3m_mtd"] > 0 else float("inf"),
         axis=1,
     )
     brand_summary["turnover_rate"] = brand_summary.apply(
-        lambda row: row["avg_sales_qty"] / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
+        lambda row: (row["daily_sales_3m_mtd"] * 30) / row["inventory_qty"] if row["inventory_qty"] > 0 else 0,
         axis=1,
     )
     brand_summary["turnover_days"] = brand_summary.apply(
-        lambda row: round(30 / row["turnover_rate"]) if row["turnover_rate"] > 0 else float("inf"),
+        lambda row: round(row["inventory_qty"] / row["daily_sales_3m_mtd"]) if row["daily_sales_3m_mtd"] > 0 else float("inf"),
         axis=1,
     )
     brand_summary["risk_level"] = brand_summary["turnover_days"].apply(classify)
@@ -401,7 +476,7 @@ def main() -> None:
 
     missing_sales = sales_totals.copy()
     missing_sales["is_missing"] = missing_sales.apply(is_missing, axis=1)
-    missing_sales = missing_sales[missing_sales["is_missing"] & (missing_sales["avg_sales_qty"] > 0)]
+    missing_sales = missing_sales[missing_sales["is_missing"] & (missing_sales["forecast_daily_sales"] > 0)]
 
     # Append missing items into detail table
     if not missing_sales.empty:
@@ -416,7 +491,9 @@ def main() -> None:
             "brand",
             "barcode",
             "product",
-            "avg_sales_qty",
+            "daily_sales_3m_mtd",
+            "daily_sales_30d",
+            "forecast_daily_sales",
             "inventory_qty",
                 "risk_level",
             "inventory_sales_ratio",
@@ -428,9 +505,34 @@ def main() -> None:
     detail = detail.sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
 
     detail["out_of_stock"] = detail.apply(
-        lambda row: "是" if row["avg_sales_qty"] > 0 and row["inventory_qty"] == 0 else "否",
+        lambda row: "是" if row["forecast_daily_sales"] > 0 and row["inventory_qty"] == 0 else "否",
         axis=1,
     )
+
+    # Suggested outbound/replenishment quantities (store-SKU only, no lane matching)
+    detail["daily_demand"] = detail["forecast_daily_sales"]
+    detail["low_target_qty"] = detail["daily_demand"] * low_days
+    detail["high_keep_qty"] = detail["daily_demand"] * high_days
+    detail["need_qty"] = detail.apply(
+        lambda row: math.ceil(max(0, row["low_target_qty"] - row["inventory_qty"]))
+        if row["forecast_daily_sales"] > 0
+        else 0,
+        axis=1,
+    )
+    detail["suggest_outbound_qty"] = detail.apply(
+        lambda row: math.floor(max(0, row["inventory_qty"] - row["high_keep_qty"]))
+        if row["risk_level"] == "高" and row["forecast_daily_sales"] > 0
+        else 0,
+        axis=1,
+    )
+    detail["suggest_replenish_qty"] = detail.apply(
+        lambda row: row["need_qty"]
+        if (row["risk_level"] == "低" or row["out_of_stock"] == "是")
+        else 0,
+        axis=1,
+    )
+    detail["suggest_outbound_qty"] = detail["suggest_outbound_qty"].astype(int)
+    detail["suggest_replenish_qty"] = detail["suggest_replenish_qty"].astype(int)
 
     # Rename columns to Chinese for output
     detail_out = detail.rename(columns={
@@ -438,13 +540,16 @@ def main() -> None:
         "brand": "品牌",
         "barcode": "商品条码",
         "product": "商品名称",
-        "avg_sales_qty": "近两月月均销售数量",
+        "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
+        "daily_sales_30d": "近30天平均日销售",
         "inventory_qty": "库存数量",
         "out_of_stock": "缺货",
         "risk_level": "风险等级",
         "inventory_sales_ratio": "库存/销售比",
         "turnover_rate": "库存周转率",
         "turnover_days": "库存周转天数",
+        "suggest_outbound_qty": "建议调出数量",
+        "suggest_replenish_qty": "建议补货数量",
     })
     detail_out["商品条码"] = detail_out["商品条码"].astype(str)
     detail_out = detail_out[[
@@ -452,49 +557,137 @@ def main() -> None:
         "品牌",
         "商品条码",
         "商品名称",
-        "近两月月均销售数量",
+        "近三月+本月迄今平均日销",
+        "近30天平均日销售",
         "库存数量",
         "缺货",
         "风险等级",
         "库存/销售比",
         "库存周转率",
         "库存周转天数",
+        "建议调出数量",
+        "建议补货数量",
     ]]
 
     store_summary_out = store_summary.rename(columns={
         "store": "门店名称",
-        "avg_sales_qty": "近两月月均销售数量",
+        "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
+        "daily_sales_30d": "近30天平均日销售",
         "inventory_qty": "库存数量",
         "risk_level": "风险等级",
         "inventory_sales_ratio": "库存/销售比",
         "turnover_rate": "库存周转率",
         "turnover_days": "库存周转天数",
     })
+    store_summary_out = store_summary_out[[
+        "门店名称",
+        "近三月+本月迄今平均日销",
+        "近30天平均日销售",
+        "库存数量",
+        "库存/销售比",
+        "库存周转率",
+        "库存周转天数",
+        "风险等级",
+    ]]
 
     brand_summary_out = brand_summary.rename(columns={
         "brand": "品牌",
-        "avg_sales_qty": "近两月月均销售数量",
+        "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
+        "daily_sales_30d": "近30天平均日销售",
         "inventory_qty": "库存数量",
         "risk_level": "风险等级",
         "inventory_sales_ratio": "库存/销售比",
         "turnover_rate": "库存周转率",
         "turnover_days": "库存周转天数",
     })
+    brand_summary_out = brand_summary_out[[
+        "品牌",
+        "近三月+本月迄今平均日销",
+        "近30天平均日销售",
+        "库存数量",
+        "库存/销售比",
+        "库存周转率",
+        "库存周转天数",
+        "风险等级",
+    ]]
 
     missing_out = missing_sales[[
         "store",
         "brand",
         "barcode",
         "product",
-        "avg_sales_qty",
+        "daily_sales_3m_mtd",
+        "daily_sales_30d",
     ]].rename(columns={
         "store": "门店名称",
         "brand": "品牌",
         "barcode": "商品条码",
         "product": "商品名称",
-        "avg_sales_qty": "近两月月均销售数量",
+        "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
+        "daily_sales_30d": "近30天平均日销售",
     })
     missing_out["商品条码"] = missing_out["商品条码"].astype(str)
+    replenish_lookup_exact = (
+        detail_out[["门店名称", "品牌", "商品条码", "商品名称", "建议补货数量"]]
+        .groupby(["门店名称", "品牌", "商品条码", "商品名称"], as_index=False)["建议补货数量"]
+        .max()
+    )
+    missing_out = missing_out.merge(
+        replenish_lookup_exact,
+        on=["门店名称", "品牌", "商品条码", "商品名称"],
+        how="left",
+    )
+    replenish_lookup_fallback = (
+        detail_out[["门店名称", "品牌", "商品名称", "建议补货数量"]]
+        .groupby(["门店名称", "品牌", "商品名称"], as_index=False)["建议补货数量"]
+        .max()
+        .rename(columns={"建议补货数量": "建议补货数量_fallback"})
+    )
+    missing_out = missing_out.merge(
+        replenish_lookup_fallback,
+        on=["门店名称", "品牌", "商品名称"],
+        how="left",
+    )
+    missing_out["建议补货数量"] = (
+        missing_out["建议补货数量"].fillna(missing_out["建议补货数量_fallback"]).fillna(0).astype(int)
+    )
+    missing_out = missing_out.drop(columns=["建议补货数量_fallback"])
+    missing_out = missing_out[[
+        "门店名称",
+        "品牌",
+        "商品条码",
+        "商品名称",
+        "近三月+本月迄今平均日销",
+        "近30天平均日销售",
+        "建议补货数量",
+    ]]
+
+    replenish_out = detail_out[detail_out["建议补货数量"] > 0].copy()
+    replenish_out = replenish_out[[
+        "门店名称",
+        "品牌",
+        "商品条码",
+        "商品名称",
+        "近三月+本月迄今平均日销",
+        "近30天平均日销售",
+        "库存数量",
+        "缺货",
+        "风险等级",
+        "建议补货数量",
+    ]]
+
+    transfer_out = detail_out[detail_out["建议调出数量"] > 0].copy()
+    transfer_out = transfer_out[[
+        "门店名称",
+        "品牌",
+        "商品条码",
+        "商品名称",
+        "近三月+本月迄今平均日销",
+        "近30天平均日销售",
+        "库存数量",
+        "风险等级",
+        "建议调出数量",
+    ]]
 
     # Summary sheet
     summary_rows = [
@@ -503,7 +696,7 @@ def main() -> None:
         ["风险等级-低", int((detail_out["风险等级"] == "低").sum())],
         ["缺货/库存缺失SKU数", int(len(missing_out))],
         ["库存总量", float(detail_out["库存数量"].sum())],
-        ["近两月月均销售总量", float(detail_out["近两月月均销售数量"].sum())],
+        ["近三月+本月迄今平均日销总量", float(detail_out["近三月+本月迄今平均日销"].sum())],
     ]
     summary_out = pd.DataFrame(summary_rows, columns=["指标", "数值"])
 
@@ -512,6 +705,8 @@ def main() -> None:
         store_summary_out.to_excel(writer, sheet_name="门店汇总", index=False)
         brand_summary_out.to_excel(writer, sheet_name="品牌汇总", index=False)
         missing_out.to_excel(writer, sheet_name="缺货清单", index=False)
+        replenish_out.to_excel(writer, sheet_name="建议补货清单", index=False)
+        transfer_out.to_excel(writer, sheet_name="建议调货清单", index=False)
         summary_out.to_excel(writer, sheet_name="汇总", index=False)
 
     # Apply styling and merging
@@ -537,7 +732,7 @@ def main() -> None:
         ws.cell(row=1, column=1).font = Font(bold=True)
         ws.cell(row=1, column=1).alignment = center
 
-        ws.freeze_panes = "C3" if sheet_name == "明细" else "A3"
+        ws.freeze_panes = "E3" if sheet_name == "明细" else "A3"
         last_col = ws.max_column
         last_col_letter = ws.cell(row=2, column=last_col).column_letter
         ws.auto_filter.ref = f"A2:{last_col_letter}{ws.max_row}"
@@ -553,12 +748,15 @@ def main() -> None:
             "品牌": 10,
             "商品条码": 16,
             "商品名称": 36,
-            "近两月月均销售数量": 18,
+            "近三月+本月迄今平均日销": 22,
+            "近30天平均日销售": 16,
             "库存数量": 10,
             "风险等级": 8,
             "库存/销售比": 12,
             "库存周转率": 12,
             "库存周转天数": 12,
+            "建议调出数量": 12,
+            "建议补货数量": 12,
         }
 
         for col in ws.columns:
@@ -609,8 +807,8 @@ def main() -> None:
                 row[barcode_idx - 1].number_format = "@"
 
         # Out-of-stock highlight (avg sales > 0, inventory == 0)
-        if "近两月月均销售数量" in headers and "库存数量" in headers:
-            avg_idx = headers.index("近两月月均销售数量") + 1
+        if "近三月+本月迄今平均日销" in headers and "库存数量" in headers:
+            avg_idx = headers.index("近三月+本月迄今平均日销") + 1
             inv_idx = headers.index("库存数量") + 1
             for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
                 avg_val = row[avg_idx - 1].value or 0
@@ -622,11 +820,14 @@ def main() -> None:
 
         # Number format
         number_formats = {
-            "近两月月均销售数量": "0.0",
+            "近三月+本月迄今平均日销": "0.000",
+            "近30天平均日销售": "0.000",
             "库存数量": "0",
             "库存/销售比": "0.0",
             "库存周转率": "0.0%",
             "库存周转天数": "0",
+            "建议调出数量": "0",
+            "建议补货数量": "0",
         }
         for name, fmt in number_formats.items():
             if name in headers:
@@ -634,7 +835,7 @@ def main() -> None:
                 for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
                     row[idx - 1].number_format = fmt
 
-    for sheet in ["明细", "门店汇总", "品牌汇总", "缺货清单", "汇总"]:
+    for sheet in ["明细", "门店汇总", "品牌汇总", "缺货清单", "建议补货清单", "建议调货清单", "汇总"]:
         style_sheet(wb[sheet], sheet)
 
     # Merge same store in Detail sheet
