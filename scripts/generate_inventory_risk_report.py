@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+from decimal import Decimal, InvalidOperation
 import re
 
 import numpy as np
@@ -26,18 +27,78 @@ DEFAULT_CONFIG = {
     "sales_window_full_months": 3,
     "sales_window_include_mtd": True,
     "sales_window_recent_days": 30,
+    "sales_date_dayfirst": False,
+    "sales_date_format": "",
     "season_mode": False,
+    "fail_on_empty_window": False,
     "brand_keywords": [],
 }
 
 
-def load_config() -> Dict:
+def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(config.get("raw_data_dir"), str) or not str(config["raw_data_dir"]).strip():
+        raise ValueError("config.raw_data_dir must be a non-empty string.")
+    if not isinstance(config.get("output_file"), str) or not str(config["output_file"]).strip():
+        raise ValueError("config.output_file must be a non-empty string.")
+    if not isinstance(config.get("inventory_file"), str) or not str(config["inventory_file"]).strip():
+        raise ValueError("config.inventory_file must be a non-empty string.")
+
+    sales_files = config.get("sales_files")
+    if not isinstance(sales_files, list):
+        raise ValueError("config.sales_files must be a list.")
+    if not all(isinstance(x, str) and x.strip() for x in sales_files):
+        raise ValueError("config.sales_files entries must be non-empty strings.")
+
+    risk_days_high = float(config.get("risk_days_high", 60))
+    risk_days_low = float(config.get("risk_days_low", 45))
+    if risk_days_high <= 0 or risk_days_low <= 0:
+        raise ValueError("risk_days_high and risk_days_low must be positive.")
+    if risk_days_low >= risk_days_high:
+        raise ValueError("risk_days_low must be smaller than risk_days_high.")
+
+    full_months = int(config.get("sales_window_full_months", 3))
+    if full_months < 0:
+        raise ValueError("sales_window_full_months must be >= 0.")
+    recent_days = int(config.get("sales_window_recent_days", 30))
+    if recent_days <= 0:
+        raise ValueError("sales_window_recent_days must be > 0.")
+    include_mtd = config.get("sales_window_include_mtd", True)
+    if not isinstance(include_mtd, bool):
+        raise ValueError("sales_window_include_mtd must be true/false.")
+    sales_date_dayfirst = config.get("sales_date_dayfirst", False)
+    if not isinstance(sales_date_dayfirst, bool):
+        raise ValueError("sales_date_dayfirst must be true/false.")
+    sales_date_format = config.get("sales_date_format", "")
+    if not isinstance(sales_date_format, str):
+        raise ValueError("sales_date_format must be a string.")
+
+    season_mode = config.get("season_mode", False)
+    if not isinstance(season_mode, (bool, str)):
+        raise ValueError("season_mode must be true/false or legacy string peak/off_peak.")
+    if isinstance(season_mode, str):
+        mode_text = season_mode.strip().lower()
+        if mode_text not in {"true", "false", "peak", "off_peak"}:
+            raise ValueError("season_mode string must be one of: true, false, peak, off_peak.")
+    fail_on_empty_window = config.get("fail_on_empty_window", False)
+    if not isinstance(fail_on_empty_window, bool):
+        raise ValueError("fail_on_empty_window must be true/false.")
+
+    brand_keywords = config.get("brand_keywords")
+    if not isinstance(brand_keywords, list):
+        raise ValueError("brand_keywords must be a list.")
+    if not all(isinstance(x, str) for x in brand_keywords):
+        raise ValueError("brand_keywords entries must be strings.")
+
+    return config
+
+
+def load_config() -> Dict[str, Any]:
     config = DEFAULT_CONFIG.copy()
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f) or {}
         config.update({k: loaded.get(k, v) for k, v in config.items()})
-    return config
+    return validate_config(config)
 
 
 def extract_month_key(filename: str) -> Optional[int]:
@@ -54,7 +115,7 @@ def find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
     return None
 
 
-def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str, str]:
+def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str, str, str]:
     df = df.copy()
     df.columns = df.columns.str.strip()
 
@@ -81,9 +142,6 @@ def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, s
         raise ValueError(f"Missing required sales columns: {', '.join(missing)}")
 
     df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df = df[df[date_col].notna()].copy()
-
     return df, store_col, brand_col, product_col, barcode_col, qty_col, date_col
 
 
@@ -121,7 +179,7 @@ def classify_risk_levels(turnover_days: pd.Series, low_days: float, high_days: f
     )
 
 
-def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str, str]:
+def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[str], str, str, str]:
     df = df.copy()
     df.columns = df.columns.str.strip()
 
@@ -161,10 +219,28 @@ def normalize_barcode_value(value) -> Optional[str]:
     text = str(value).strip()
     if text == "" or text.lower() in {"nan", "none"}:
         return None
+    # Normalize scientific notation text, e.g. "6.907992633671E12"
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?[eE][+-]?\d+", text):
+        try:
+            text = format(Decimal(text), "f")
+        except (InvalidOperation, ValueError):
+            return text
     # Normalize common spreadsheet artifacts such as "6907...0.0"
     if re.fullmatch(r"\d+\.0+", text):
         return text.split(".", 1)[0]
+    if re.fullmatch(r"\d+\.\d+", text):
+        integer, decimal = text.split(".", 1)
+        if set(decimal) == {"0"}:
+            return integer
     return text
+
+
+def parse_sales_dates(raw_dates: pd.Series, date_format: str, dayfirst: bool) -> pd.Series:
+    if date_format.strip():
+        parsed = pd.to_datetime(raw_dates, format=date_format.strip(), errors="coerce")
+    else:
+        parsed = pd.to_datetime(raw_dates, errors="coerce", dayfirst=dayfirst)
+    return parsed
 
 
 def extract_brand_from_product(product: Optional[str], brands: List[str]) -> str:
@@ -306,7 +382,10 @@ def main() -> None:
     full_months = int(config.get("sales_window_full_months", 3))
     include_mtd = bool(config.get("sales_window_include_mtd", True))
     recent_days = int(config.get("sales_window_recent_days", 30))
+    sales_date_dayfirst = bool(config.get("sales_date_dayfirst", False))
+    sales_date_format = str(config.get("sales_date_format", ""))
     season_mode_raw = config.get("season_mode", False)
+    fail_on_empty_window = bool(config.get("fail_on_empty_window", False))
     if isinstance(season_mode_raw, bool):
         use_peak_mode = season_mode_raw
     else:
@@ -326,7 +405,11 @@ def main() -> None:
     mtd_start = (inventory_date_ts.replace(day=1) - pd.DateOffset(months=full_months)).normalize()
     recent_start = (inventory_date_ts - pd.Timedelta(days=recent_days - 1)).normalize()
 
-    sales_df["sales_date"] = pd.to_datetime(sales_df["sales_date"], errors="coerce")
+    sales_df["sales_date"] = parse_sales_dates(
+        sales_df["sales_date"],
+        date_format=sales_date_format,
+        dayfirst=sales_date_dayfirst,
+    )
     sales_df = sales_df[sales_df["sales_date"].notna()].copy()
     if sales_df.empty:
         raise ValueError("Sales data has no valid dates after parsing 销售时间.")
@@ -337,6 +420,10 @@ def main() -> None:
     recent_days_effective = overlap_days(recent_start, inventory_date_ts, data_min_date, data_max_date)
     has_mtd_window_data = mtd_days > 0
     has_recent_window_data = recent_days_effective > 0
+    if fail_on_empty_window and (not has_mtd_window_data or not has_recent_window_data):
+        raise ValueError(
+            f"Sales window has no overlapping data: 3M+MTD={has_mtd_window_data}, 30D={has_recent_window_data}"
+        )
 
     sales_mtd = sales_df[(sales_df["sales_date"] >= mtd_start) & (sales_df["sales_date"] <= mtd_end)]
     sales_30d = sales_df[(sales_df["sales_date"] >= recent_start) & (sales_df["sales_date"] <= inventory_date_ts)]
@@ -381,7 +468,6 @@ def main() -> None:
 
     # Match sales to inventory: barcode match first, fallback to store+brand+product
     sales_barcode = sales_totals[sales_totals["barcode_key"].notna()].copy()
-    inv_barcode = inv_totals[inv_totals["barcode_key"].notna()].copy()
 
     detail = inv_totals.copy()
     detail = detail.merge(
@@ -736,14 +822,19 @@ def main() -> None:
         ["近三月+本月迄今平均日销总量", float(detail_out["近三月+本月迄今平均日销"].sum())],
         ["近30天平均日销售总量", float(detail_out["近30天平均日销售"].sum())],
         ["预测平均日销总量(季节模式后)", float(detail["forecast_daily_sales"].sum())],
+    ]
+    summary_out = pd.DataFrame(summary_rows, columns=["指标", "数值"])
+    status_rows = [
         ["季节模式", "旺季(取高值)" if use_peak_mode else "淡季(取低值)"],
+        ["3M+MTD窗口有效", "是" if has_mtd_window_data else "否"],
+        ["30天窗口有效", "是" if has_recent_window_data else "否"],
         [
             "窗口数据状态",
             "正常" if (has_mtd_window_data and has_recent_window_data)
             else f"警告: 3M+MTD有效={has_mtd_window_data}, 30天有效={has_recent_window_data}",
         ],
     ]
-    summary_out = pd.DataFrame(summary_rows, columns=["指标", "数值"])
+    status_out = pd.DataFrame(status_rows, columns=["状态项", "值"])
 
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         detail_out.to_excel(writer, sheet_name="明细", index=False)
@@ -753,6 +844,7 @@ def main() -> None:
         replenish_out.to_excel(writer, sheet_name="建议补货清单", index=False)
         transfer_out.to_excel(writer, sheet_name="建议调货清单", index=False)
         summary_out.to_excel(writer, sheet_name="汇总", index=False)
+        status_out.to_excel(writer, sheet_name="运行状态", index=False)
 
     # Apply styling and merging
     wb = load_workbook(output_file)
@@ -818,52 +910,8 @@ def main() -> None:
             else:
                 ws.column_dimensions[col_letter].width = min(auto_width, 40)
 
-        # Align text columns to left, numbers to center
-        for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
-            for cell in row:
-                if isinstance(cell.value, (int, float)):
-                    cell.alignment = center
-                else:
-                    cell.alignment = left
-
-        # Wrap long text columns for readability
+        header_to_idx = {name: idx + 1 for idx, name in enumerate(headers)}
         wrap_columns = {"门店名称", "商品名称"}
-        for col_idx, header in enumerate(headers, start=1):
-            if header in wrap_columns:
-                for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
-                    row[col_idx - 1].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-
-        # Risk color
-        headers = [c.value for c in ws[2]]
-        if "风险等级" in headers:
-            risk_idx = headers.index("风险等级") + 1
-            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
-                cell = row[risk_idx - 1]
-                fill = risk_fills.get(cell.value)
-                if fill:
-                    cell.fill = fill
-                    cell.font = Font(color="FFFFFF", bold=True)
-                    cell.alignment = center
-
-        # Barcode column as text
-        if "商品条码" in headers:
-            barcode_idx = headers.index("商品条码") + 1
-            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
-                row[barcode_idx - 1].number_format = "@"
-
-        # Out-of-stock highlight (avg sales > 0, inventory == 0)
-        if "近三月+本月迄今平均日销" in headers and "库存数量" in headers:
-            avg_idx = headers.index("近三月+本月迄今平均日销") + 1
-            inv_idx = headers.index("库存数量") + 1
-            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
-                avg_val = row[avg_idx - 1].value or 0
-                inv_val = row[inv_idx - 1].value or 0
-                if avg_val > 0 and inv_val == 0:
-                    for cell in row:
-                        cell.fill = out_of_stock_fill
-                        cell.font = Font(color="FFFFFF", bold=True)
-
-        # Number format
         number_formats = {
             "近三月+本月迄今平均日销": "0.000",
             "近30天平均日销售": "0.000",
@@ -874,13 +922,43 @@ def main() -> None:
             "建议调出数量": "0",
             "建议补货数量": "0",
         }
-        for name, fmt in number_formats.items():
-            if name in headers:
-                idx = headers.index(name) + 1
-                for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
-                    row[idx - 1].number_format = fmt
+        for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
+            for col_idx, cell in enumerate(row, start=1):
+                header = headers[col_idx - 1]
+                if header in wrap_columns:
+                    cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                elif isinstance(cell.value, (int, float)):
+                    cell.alignment = center
+                else:
+                    cell.alignment = left
 
-    for sheet in ["明细", "门店汇总", "品牌汇总", "缺货清单", "建议补货清单", "建议调货清单", "汇总"]:
+                if header in number_formats:
+                    cell.number_format = number_formats[header]
+
+            risk_idx = header_to_idx.get("风险等级")
+            if risk_idx is not None:
+                risk_cell = row[risk_idx - 1]
+                risk_fill = risk_fills.get(risk_cell.value)
+                if risk_fill:
+                    risk_cell.fill = risk_fill
+                    risk_cell.font = Font(color="FFFFFF", bold=True)
+                    risk_cell.alignment = center
+
+            barcode_idx = header_to_idx.get("商品条码")
+            if barcode_idx is not None:
+                row[barcode_idx - 1].number_format = "@"
+
+            avg_idx = header_to_idx.get("近三月+本月迄今平均日销")
+            inv_idx = header_to_idx.get("库存数量")
+            if avg_idx is not None and inv_idx is not None:
+                avg_val = row[avg_idx - 1].value or 0
+                inv_val = row[inv_idx - 1].value or 0
+                if avg_val > 0 and inv_val == 0:
+                    for cell in row:
+                        cell.fill = out_of_stock_fill
+                        cell.font = Font(color="FFFFFF", bold=True)
+
+    for sheet in ["明细", "门店汇总", "品牌汇总", "缺货清单", "建议补货清单", "建议调货清单", "汇总", "运行状态"]:
         style_sheet(wb[sheet], sheet)
 
     # Merge same store in Detail sheet

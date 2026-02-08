@@ -22,7 +22,8 @@ Required columns in inventory file:
   - `缺货清单`: 有销量但库存缺失的 SKU（含建议补货数量）
   - `建议补货清单`: 建议补货数量 > 0 的 SKU
   - `建议调货清单`: 建议调出数量 > 0 的 SKU
-  - `汇总`: 风险等级统计、缺货 SKU 数、库存总量、近三月+本月迄今日销总量、近30天日销总量、预测日销总量、窗口数据状态
+  - `汇总`: 风险等级统计、缺货 SKU 数、库存总量、近三月+本月迄今日销总量、近30天日销总量、预测日销总量
+  - `运行状态`: 季节模式和窗口数据有效性告警
 
 Each sheet adds a title in row 1: `库存日期：YYYY-MM-DD` (extracted from the inventory file),
 and applies header styling, filters, borders, risk color highlights, and out-of-stock row highlights.
@@ -52,7 +53,7 @@ run.bat
   - `season_mode=true`: `max(近三月+本月迄今平均日销, 近30天平均日销售)`
 - `库存周转率` = (`预测平均日销(季节模式后)` * 30) / 库存
 - `库存周转天数` = 库存 / `预测平均日销(季节模式后)`
-- 当任一销售窗口与可用销售日期完全无重叠时，对应窗口日销按 `0` 处理，并在 `汇总` 的 `窗口数据状态` 给出告警。
+- 当任一销售窗口与可用销售日期完全无重叠时，对应窗口日销按 `0` 处理，并在 `运行状态` 给出告警。
 - Risk levels by turnover days:
   - 高: > 60 days
   - 中: 45–60 days
@@ -69,7 +70,10 @@ Key fields:
 - `sales_window_full_months`: number of full months before current month (default `3`).
 - `sales_window_include_mtd`: include month-to-date sales (default `true`).
 - `sales_window_recent_days`: rolling window length for recent daily sales (default `30`).
+- `sales_date_dayfirst`: parse ambiguous dates with day-first preference (`false` by default).
+- `sales_date_format`: optional explicit date format for `销售时间` (e.g. `%Y-%m-%d`); empty means auto-parse.
 - `season_mode`: boolean (`false` / `true`).
   - `false`: use `min(近三月+本月迄今平均日销, 近30天平均日销售)` (off-peak)
   - `true`: use `max(近三月+本月迄今平均日销, 近30天平均日销售)` (peak)
+- `fail_on_empty_window`: if `true`, raise error when 3M+MTD or 30-day window has no overlapping sales data.
 - `brand_keywords`: list of brand names used to derive `品牌` from `商品名称` when missing.

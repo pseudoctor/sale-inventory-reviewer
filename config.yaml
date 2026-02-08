@@ -13,7 +13,10 @@ risk_days_low: 45
 sales_window_full_months: 3
 sales_window_include_mtd: true
 sales_window_recent_days: 30
+sales_date_dayfirst: false
+sales_date_format: ""
 season_mode: true # false: 淡季取低(min), true: 旺季取高(max)
+fail_on_empty_window: false
 
 brand_keywords:
   - "伊利"
