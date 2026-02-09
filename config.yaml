@@ -17,6 +17,7 @@ sales_date_dayfirst: false
 sales_date_format: ""
 season_mode: true # false: 淡季取低(min), true: 旺季取高(max)
 fail_on_empty_window: false
+carton_factor_file: "./data/华润单品装箱数.xlsx"
 
 brand_keywords:
   - "伊利"

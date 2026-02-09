@@ -19,11 +19,17 @@ Required columns in inventory file:
   - `明细`: 门店 → 品牌 → 商品层级（含近三月+本月迄今平均日销、近30天平均日销售、风险等级、周转指标、补货/调出建议）
   - `门店汇总`: 门店维度汇总
   - `品牌汇总`: 品牌维度汇总
-  - `缺货清单`: 有销量但库存缺失的 SKU（含建议补货数量）
+  - `缺货清单`: 有销量但库存缺失的 SKU（含建议补货数量、建议补货箱数）
   - `建议补货清单`: 建议补货数量 > 0 的 SKU
   - `建议调货清单`: 建议调出数量 > 0 的 SKU
   - `汇总`: 风险等级统计、缺货 SKU 数、库存总量、近三月+本月迄今日销总量、近30天日销总量、预测日销总量
-  - `运行状态`: 季节模式和窗口数据有效性告警
+  - `运行状态`: 季节模式、窗口有效性、无效日期行数、装箱因子缺失行数
+
+`建议补货清单` 与 `建议调货清单` 会额外包含：
+- `装箱数（因子）`
+- `建议补货箱数`（仅建议补货清单）
+  - 旺季（`season_mode=true`）：`ceil(建议数量 / 装箱数)`
+  - 淡季（`season_mode=false`）：`floor(建议数量 / 装箱数)`
 
 Each sheet adds a title in row 1: `库存日期：YYYY-MM-DD` (extracted from the inventory file),
 and applies header styling, filters, borders, risk color highlights, and out-of-stock row highlights.
@@ -76,4 +82,6 @@ Key fields:
   - `false`: use `min(近三月+本月迄今平均日销, 近30天平均日销售)` (off-peak)
   - `true`: use `max(近三月+本月迄今平均日销, 近30天平均日销售)` (peak)
 - `fail_on_empty_window`: if `true`, raise error when 3M+MTD or 30-day window has no overlapping sales data.
+- `carton_factor_file`: carton factor mapping file path (default `./data/华润单品装箱数.xlsx`).
+  - Required columns: `商品条码`, `商品名称`, `装箱数（因子）`
 - `brand_keywords`: list of brand names used to derive `品牌` from `商品名称` when missing.

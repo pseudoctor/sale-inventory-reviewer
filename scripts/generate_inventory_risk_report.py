@@ -31,7 +31,44 @@ DEFAULT_CONFIG = {
     "sales_date_format": "",
     "season_mode": False,
     "fail_on_empty_window": False,
+    "carton_factor_file": "./data/华润单品装箱数.xlsx",
     "brand_keywords": [],
+}
+
+PREFERRED_WIDTHS = {
+    "门店名称": 18,
+    "品牌": 10,
+    "商品条码": 16,
+    "商品名称": 36,
+    "装箱数（因子）": 12,
+    "近三月+本月迄今平均日销": 22,
+    "近30天平均日销售": 16,
+    "库存数量": 10,
+    "风险等级": 8,
+    "库存/销售比": 12,
+    "库存周转率": 12,
+    "库存周转天数": 12,
+    "建议调出数量": 12,
+    "建议补货数量": 12,
+    "建议补货箱数": 12,
+}
+
+NUMBER_FORMATS = {
+    "近三月+本月迄今平均日销": "0.000",
+    "近30天平均日销售": "0.000",
+    "库存数量": "0",
+    "装箱数（因子）": "0",
+    "库存/销售比": "0.0",
+    "库存周转率": "0.0%",
+    "库存周转天数": "0",
+    "建议调出数量": "0",
+    "建议补货数量": "0",
+}
+
+SUMMARY_ONE_DECIMAL_METRICS = {
+    "近三月+本月迄今平均日销总量",
+    "近30天平均日销售总量",
+    "预测平均日销总量(季节模式后)",
 }
 
 
@@ -42,6 +79,9 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("config.output_file must be a non-empty string.")
     if not isinstance(config.get("inventory_file"), str) or not str(config["inventory_file"]).strip():
         raise ValueError("config.inventory_file must be a non-empty string.")
+    carton_factor_file = config.get("carton_factor_file", "")
+    if not isinstance(carton_factor_file, str) or not carton_factor_file.strip():
+        raise ValueError("config.carton_factor_file must be a non-empty string.")
 
     sales_files = config.get("sales_files")
     if not isinstance(sales_files, list):
@@ -113,6 +153,20 @@ def find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
         if c in columns:
             return c
     return None
+
+
+def resolve_sales_candidates(raw_data_dir: Path, configured_sales_files: List[str]) -> List[Path]:
+    if configured_sales_files:
+        return [raw_data_dir / name for name in configured_sales_files]
+
+    candidates: List[Tuple[int, Path]] = []
+    for path in raw_data_dir.glob("*.xlsx"):
+        month_key = extract_month_key(path.name)
+        if month_key is None:
+            continue
+        candidates.append((month_key, path))
+    candidates.sort(key=lambda x: x[0])
+    return [path for _, path in candidates]
 
 
 def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, str, str, str, str, str]:
@@ -243,6 +297,42 @@ def parse_sales_dates(raw_dates: pd.Series, date_format: str, dayfirst: bool) ->
     return parsed
 
 
+def compute_case_counts(qty: pd.Series, factor: pd.Series, use_peak_mode: bool) -> pd.Series:
+    qty_num = pd.to_numeric(qty, errors="coerce").fillna(0)
+    factor_num = pd.to_numeric(factor, errors="coerce")
+    valid_factor = factor_num > 0
+    raw_cases = np.where(valid_factor, qty_num / factor_num, np.nan)
+    rounded = np.where(valid_factor, np.ceil(raw_cases) if use_peak_mode else np.floor(raw_cases), np.nan)
+    return pd.Series(rounded, index=qty.index).astype("Int64")
+
+
+def load_carton_factor_df(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"Carton factor file not found: {path}")
+    df = pd.read_excel(path, sheet_name=0, dtype=str)
+    df.columns = df.columns.astype(str).str.strip()
+
+    barcode_col = find_column(df.columns.tolist(), ["商品条码", "条码", "商品编码.1", "商品编码", "barcode"])
+    product_col = find_column(df.columns.tolist(), ["商品名称", "商品", "product"])
+    factor_col = find_column(df.columns.tolist(), ["装箱数（因子）", "装箱数(因子)", "装箱数", "因子", "factor"])
+    if not all([barcode_col, product_col, factor_col]):
+        missing = [
+            name
+            for name, col in [("商品条码", barcode_col), ("商品名称", product_col), ("装箱数（因子）", factor_col)]
+            if col is None
+        ]
+        raise ValueError(f"Carton factor file missing columns: {', '.join(missing)}")
+
+    out = df[[barcode_col, product_col, factor_col]].copy()
+    out.columns = ["商品条码", "商品名称", "装箱数（因子）"]
+    out["商品条码"] = out["商品条码"].apply(normalize_barcode_value)
+    out["商品名称"] = out["商品名称"].astype(str).str.strip()
+    out["装箱数（因子）"] = pd.to_numeric(out["装箱数（因子）"], errors="coerce")
+    out = out[out["装箱数（因子）"].notna() & (out["装箱数（因子）"] > 0)]
+    out["装箱数（因子）"] = out["装箱数（因子）"].astype(int)
+    return out
+
+
 def extract_brand_from_product(product: Optional[str], brands: List[str]) -> str:
     if product is None:
         return "其他"
@@ -287,6 +377,28 @@ def extract_inventory_date(df: pd.DataFrame) -> str:
     return str(non_null.iloc[0]).strip()
 
 
+def apply_inventory_metrics(df: pd.DataFrame, low_days: float, high_days: float) -> pd.DataFrame:
+    out = df.copy()
+    out["inventory_sales_ratio"] = np.where(
+        out["forecast_daily_sales"] > 0,
+        out["inventory_qty"] / out["forecast_daily_sales"],
+        float("inf"),
+    )
+    out["turnover_rate"] = np.where(
+        out["inventory_qty"] > 0,
+        (out["forecast_daily_sales"] * 30) / out["inventory_qty"],
+        0,
+    )
+    turnover_precise = np.where(
+        out["forecast_daily_sales"] > 0,
+        out["inventory_qty"] / out["forecast_daily_sales"],
+        float("inf"),
+    )
+    out["turnover_days"] = np.where(np.isfinite(turnover_precise), np.round(turnover_precise), float("inf"))
+    out["risk_level"] = classify_risk_levels(pd.Series(turnover_precise, index=out.index), low_days, high_days)
+    return out
+
+
 def main() -> None:
     config = load_config()
 
@@ -301,6 +413,7 @@ def main() -> None:
 
     configured_sales_files = [f for f in config.get("sales_files") or []]
     inventory_file = config.get("inventory_file") or ""
+    carton_factor_file = config.get("carton_factor_file") or ""
     brand_keywords = [str(b).strip() for b in (config.get("brand_keywords") or []) if str(b).strip()]
     if not brand_keywords:
         brand_keywords = [
@@ -323,20 +436,7 @@ def main() -> None:
             "佳贝艾特",
         ]
 
-    # Auto-detect sales files by YYYYMM and keep all available for window calculations
-    if configured_sales_files:
-        candidate_files = [raw_data_dir / f for f in configured_sales_files]
-    else:
-        candidate_files = list(raw_data_dir.glob("*.xlsx"))
-
-    sales_candidates = []
-    for path in candidate_files:
-        month_key = extract_month_key(path.name)
-        if month_key is None:
-            continue
-        sales_candidates.append((month_key, path))
-
-    sales_candidates.sort(key=lambda x: x[0])
+    sales_candidates = resolve_sales_candidates(raw_data_dir, configured_sales_files)
 
     # Inventory data
     inv_path = raw_data_dir / inventory_file
@@ -360,25 +460,6 @@ def main() -> None:
     inv_df.columns = ["store", "brand", "product", "barcode", "inventory_qty"]
     inv_df["barcode"] = inv_df["barcode"].apply(normalize_barcode_value)
 
-    sales_data = []
-    for _, filepath in sales_candidates:
-        filename = filepath.name
-        filepath = raw_data_dir / filename
-        if not filepath.exists():
-            print(f"Warning: missing sales file {filepath}")
-            continue
-        df = pd.read_excel(filepath, sheet_name=0, dtype=str)
-        df, store_col, brand_col, product_col, barcode_col, qty_col, date_col = normalize_sales_df(df)
-        df = df[[store_col, brand_col, product_col, barcode_col, qty_col, date_col]].copy()
-        df.columns = ["store", "brand", "product", "barcode", "sales_qty", "sales_date"]
-        df["barcode"] = df["barcode"].apply(normalize_barcode_value)
-        sales_data.append(df)
-
-    if not sales_data:
-        raise FileNotFoundError("No sales files were loaded.")
-
-    sales_df = pd.concat(sales_data, ignore_index=True)
-
     full_months = int(config.get("sales_window_full_months", 3))
     include_mtd = bool(config.get("sales_window_include_mtd", True))
     recent_days = int(config.get("sales_window_recent_days", 30))
@@ -401,16 +482,40 @@ def main() -> None:
     if recent_days <= 0:
         raise ValueError("sales_window_recent_days must be > 0")
 
+    sales_data = []
+    invalid_sales_date_rows = 0
+    for filepath in sales_candidates:
+        if not filepath.exists():
+            print(f"Warning: missing sales file {filepath}")
+            continue
+        df = pd.read_excel(filepath, sheet_name=0, dtype=str)
+        df, store_col, brand_col, product_col, barcode_col, qty_col, date_col = normalize_sales_df(df)
+        df = df[[store_col, brand_col, product_col, barcode_col, qty_col, date_col]].copy()
+        df.columns = ["store", "brand", "product", "barcode", "sales_qty", "sales_date"]
+        df["barcode"] = df["barcode"].apply(normalize_barcode_value)
+        parsed_dates = parse_sales_dates(
+            df["sales_date"],
+            date_format=sales_date_format,
+            dayfirst=sales_date_dayfirst,
+        )
+        invalid_sales_date_rows += int(parsed_dates.isna().sum())
+        df["sales_date"] = parsed_dates
+        df = df[df["sales_date"].notna()].copy()
+        sales_data.append(df)
+
+    if not sales_data:
+        raise FileNotFoundError("No sales files were loaded.")
+
+    carton_factor_path = Path(carton_factor_file)
+    if not carton_factor_path.is_absolute():
+        carton_factor_path = (BASE_DIR / carton_factor_path).resolve()
+    carton_factor_df = load_carton_factor_df(carton_factor_path)
+    sales_df = pd.concat(sales_data, ignore_index=True)
+
     mtd_end = inventory_date_ts if include_mtd else (inventory_date_ts.replace(day=1) - pd.Timedelta(days=1))
     mtd_start = (inventory_date_ts.replace(day=1) - pd.DateOffset(months=full_months)).normalize()
     recent_start = (inventory_date_ts - pd.Timedelta(days=recent_days - 1)).normalize()
 
-    sales_df["sales_date"] = parse_sales_dates(
-        sales_df["sales_date"],
-        date_format=sales_date_format,
-        dayfirst=sales_date_dayfirst,
-    )
-    sales_df = sales_df[sales_df["sales_date"].notna()].copy()
     if sales_df.empty:
         raise ValueError("Sales data has no valid dates after parsing 销售时间.")
 
@@ -497,26 +602,9 @@ def main() -> None:
     detail["daily_sales_30d"] = detail["daily_sales_30d"].fillna(0)
     detail["forecast_daily_sales"] = detail["forecast_daily_sales"].fillna(0)
 
-    detail["inventory_sales_ratio"] = np.where(
-        detail["forecast_daily_sales"] > 0,
-        detail["inventory_qty"] / detail["forecast_daily_sales"],
-        float("inf"),
-    )
-    detail["turnover_rate"] = np.where(
-        detail["inventory_qty"] > 0,
-        (detail["forecast_daily_sales"] * 30) / detail["inventory_qty"],
-        0,
-    )
-    detail["turnover_days"] = np.where(
-        detail["forecast_daily_sales"] > 0,
-        np.round(detail["inventory_qty"] / detail["forecast_daily_sales"]),
-        float("inf"),
-    )
-
     high_days = float(config.get("risk_days_high", 60))
     low_days = float(config.get("risk_days_low", 45))
-
-    detail["risk_level"] = classify_risk_levels(detail["turnover_days"], low_days, high_days)
+    detail = apply_inventory_metrics(detail, low_days, high_days)
     
     detail = detail[[
         "store",
@@ -542,22 +630,7 @@ def main() -> None:
         "forecast_daily_sales": "sum",
         "inventory_qty": "sum",
     })
-    store_summary["inventory_sales_ratio"] = np.where(
-        store_summary["forecast_daily_sales"] > 0,
-        store_summary["inventory_qty"] / store_summary["forecast_daily_sales"],
-        float("inf"),
-    )
-    store_summary["turnover_rate"] = np.where(
-        store_summary["inventory_qty"] > 0,
-        (store_summary["forecast_daily_sales"] * 30) / store_summary["inventory_qty"],
-        0,
-    )
-    store_summary["turnover_days"] = np.where(
-        store_summary["forecast_daily_sales"] > 0,
-        np.round(store_summary["inventory_qty"] / store_summary["forecast_daily_sales"]),
-        float("inf"),
-    )
-    store_summary["risk_level"] = classify_risk_levels(store_summary["turnover_days"], low_days, high_days)
+    store_summary = apply_inventory_metrics(store_summary, low_days, high_days)
 
     # Brand summary
     brand_summary = detail.groupby("brand", as_index=False).agg({
@@ -566,22 +639,7 @@ def main() -> None:
         "forecast_daily_sales": "sum",
         "inventory_qty": "sum",
     })
-    brand_summary["inventory_sales_ratio"] = np.where(
-        brand_summary["forecast_daily_sales"] > 0,
-        brand_summary["inventory_qty"] / brand_summary["forecast_daily_sales"],
-        float("inf"),
-    )
-    brand_summary["turnover_rate"] = np.where(
-        brand_summary["inventory_qty"] > 0,
-        (brand_summary["forecast_daily_sales"] * 30) / brand_summary["inventory_qty"],
-        0,
-    )
-    brand_summary["turnover_days"] = np.where(
-        brand_summary["forecast_daily_sales"] > 0,
-        np.round(brand_summary["inventory_qty"] / brand_summary["forecast_daily_sales"]),
-        float("inf"),
-    )
-    brand_summary["risk_level"] = classify_risk_levels(brand_summary["turnover_days"], low_days, high_days)
+    brand_summary = apply_inventory_metrics(brand_summary, low_days, high_days)
 
     # Missing-in-inventory list: sales with qty but no inventory match
     inv_barcode_keys = set(zip(inv_totals["store"], inv_totals["barcode_key"]))
@@ -812,6 +870,79 @@ def main() -> None:
         "建议调出数量",
     ]]
 
+    factor_by_barcode = (
+        carton_factor_df[carton_factor_df["商品条码"].notna()][["商品条码", "装箱数（因子）"]]
+        .drop_duplicates(subset=["商品条码"], keep="first")
+    )
+    factor_by_product = (
+        carton_factor_df[["商品名称", "装箱数（因子）"]]
+        .drop_duplicates(subset=["商品名称"], keep="first")
+    )
+
+    def attach_factor_and_case_count(
+        df: pd.DataFrame,
+        qty_col: str,
+        case_col: Optional[str] = None,
+        case_with_unit: bool = False,
+        include_factor_col: bool = True,
+    ) -> pd.DataFrame:
+        out = df.copy()
+        out["商品条码"] = out["商品条码"].apply(normalize_barcode_value)
+        out = out.merge(factor_by_barcode, on="商品条码", how="left")
+        fallback = out["装箱数（因子）"].isna()
+        if fallback.any():
+            merged = out.loc[fallback, ["商品名称"]].merge(
+                factor_by_product,
+                on="商品名称",
+                how="left",
+                suffixes=("", "_fallback"),
+            )
+            out.loc[fallback, "装箱数（因子）"] = merged["装箱数（因子）_fallback"].values
+
+        out["装箱数（因子）"] = pd.to_numeric(out["装箱数（因子）"], errors="coerce")
+        valid_factor = out["装箱数（因子）"] > 0
+        if case_col:
+            out[case_col] = compute_case_counts(out[qty_col], out["装箱数（因子）"], use_peak_mode)
+            if case_with_unit:
+                out[case_col] = out[case_col].apply(lambda x: f"{int(x)}件" if pd.notna(x) else "")
+
+        out["装箱数（因子）"] = np.where(valid_factor, out["装箱数（因子）"].astype(int), np.nan)
+
+        cols = out.columns.tolist()
+        if "装箱数（因子）" in cols:
+            cols.remove("装箱数（因子）")
+            if include_factor_col:
+                product_idx = cols.index("商品名称")
+                cols.insert(product_idx + 1, "装箱数（因子）")
+        if case_col and case_col in cols:
+            cols.remove(case_col)
+            cols.append(case_col)
+        return out[cols]
+
+    missing_out = attach_factor_and_case_count(
+        missing_out,
+        "建议补货数量",
+        case_col="建议补货箱数",
+        case_with_unit=True,
+        include_factor_col=False,
+    )
+
+    replenish_out = attach_factor_and_case_count(
+        replenish_out,
+        "建议补货数量",
+        case_col="建议补货箱数",
+        case_with_unit=True,
+        include_factor_col=True,
+    )
+    transfer_out = attach_factor_and_case_count(
+        transfer_out,
+        "建议调出数量",
+        case_col=None,
+        include_factor_col=True,
+    )
+    if "建议调货箱数" in transfer_out.columns:
+        transfer_out = transfer_out.drop(columns=["建议调货箱数"])
+
     # Summary sheet
     summary_rows = [
         ["风险等级-高", int((detail_out["风险等级"] == "高").sum())],
@@ -819,15 +950,24 @@ def main() -> None:
         ["风险等级-低", int((detail_out["风险等级"] == "低").sum())],
         ["缺货/库存缺失SKU数", int(len(missing_out))],
         ["库存总量", float(detail_out["库存数量"].sum())],
-        ["近三月+本月迄今平均日销总量", float(detail_out["近三月+本月迄今平均日销"].sum())],
-        ["近30天平均日销售总量", float(detail_out["近30天平均日销售"].sum())],
-        ["预测平均日销总量(季节模式后)", float(detail["forecast_daily_sales"].sum())],
+        ["近三月+本月迄今平均日销总量", round(float(detail_out["近三月+本月迄今平均日销"].sum()), 1)],
+        ["近30天平均日销售总量", round(float(detail_out["近30天平均日销售"].sum()), 1)],
+        ["预测平均日销总量(季节模式后)", round(float(detail["forecast_daily_sales"].sum()), 1)],
     ]
     summary_out = pd.DataFrame(summary_rows, columns=["指标", "数值"])
     status_rows = [
         ["季节模式", "旺季(取高值)" if use_peak_mode else "淡季(取低值)"],
         ["3M+MTD窗口有效", "是" if has_mtd_window_data else "否"],
         ["30天窗口有效", "是" if has_recent_window_data else "否"],
+        ["销售无效日期行数", invalid_sales_date_rows],
+        [
+            "建议补货清单缺失装箱因子行数",
+            int((replenish_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in replenish_out.columns else 0,
+        ],
+        [
+            "建议调货清单缺失装箱因子行数",
+            int((transfer_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in transfer_out.columns else 0,
+        ],
         [
             "窗口数据状态",
             "正常" if (has_mtd_window_data and has_recent_window_data)
@@ -880,22 +1020,6 @@ def main() -> None:
 
         # Auto width based on cell content (with caps for readability)
         headers = [c.value for c in ws[2]]
-        preferred_widths = {
-            "门店名称": 18,
-            "品牌": 10,
-            "商品条码": 16,
-            "商品名称": 36,
-            "近三月+本月迄今平均日销": 22,
-            "近30天平均日销售": 16,
-            "库存数量": 10,
-            "风险等级": 8,
-            "库存/销售比": 12,
-            "库存周转率": 12,
-            "库存周转天数": 12,
-            "建议调出数量": 12,
-            "建议补货数量": 12,
-        }
-
         for col in ws.columns:
             max_len = 0
             col_letter = ws.cell(row=2, column=col[0].column).column_letter
@@ -905,23 +1029,13 @@ def main() -> None:
                     continue
                 max_len = max(max_len, len(str(cell.value)))
             auto_width = max_len + 2
-            if header in preferred_widths:
-                ws.column_dimensions[col_letter].width = max(preferred_widths[header], min(auto_width, 40))
+            if header in PREFERRED_WIDTHS:
+                ws.column_dimensions[col_letter].width = max(PREFERRED_WIDTHS[header], min(auto_width, 40))
             else:
                 ws.column_dimensions[col_letter].width = min(auto_width, 40)
 
         header_to_idx = {name: idx + 1 for idx, name in enumerate(headers)}
         wrap_columns = {"门店名称", "商品名称"}
-        number_formats = {
-            "近三月+本月迄今平均日销": "0.000",
-            "近30天平均日销售": "0.000",
-            "库存数量": "0",
-            "库存/销售比": "0.0",
-            "库存周转率": "0.0%",
-            "库存周转天数": "0",
-            "建议调出数量": "0",
-            "建议补货数量": "0",
-        }
         for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
             for col_idx, cell in enumerate(row, start=1):
                 header = headers[col_idx - 1]
@@ -932,8 +1046,8 @@ def main() -> None:
                 else:
                     cell.alignment = left
 
-                if header in number_formats:
-                    cell.number_format = number_formats[header]
+                if header in NUMBER_FORMATS:
+                    cell.number_format = NUMBER_FORMATS[header]
 
             risk_idx = header_to_idx.get("风险等级")
             if risk_idx is not None:
@@ -957,6 +1071,14 @@ def main() -> None:
                     for cell in row:
                         cell.fill = out_of_stock_fill
                         cell.font = Font(color="FFFFFF", bold=True)
+
+        if sheet_name == "汇总" and "指标" in header_to_idx and "数值" in header_to_idx:
+            metric_idx = header_to_idx["指标"] - 1
+            value_idx = header_to_idx["数值"] - 1
+            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
+                metric_name = row[metric_idx].value
+                if metric_name in SUMMARY_ONE_DECIMAL_METRICS and isinstance(row[value_idx].value, (int, float)):
+                    row[value_idx].number_format = "0.0"
 
     for sheet in ["明细", "门店汇总", "品牌汇总", "缺货清单", "建议补货清单", "建议调货清单", "汇总", "运行状态"]:
         style_sheet(wb[sheet], sheet)
