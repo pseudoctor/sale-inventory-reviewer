@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from decimal import Decimal, InvalidOperation
+from datetime import datetime
+from copy import deepcopy
 import re
 
 import numpy as np
@@ -18,6 +20,9 @@ BASE_DIR = Path(__file__).parent.parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
 
 DEFAULT_CONFIG = {
+    "run_mode": "single",
+    "display_name": "",
+    "system_id": "",
     "raw_data_dir": "./raw_data",
     "output_file": "./reports/inventory_risk_report.xlsx",
     "sales_files": [],
@@ -31,8 +36,13 @@ DEFAULT_CONFIG = {
     "sales_date_format": "",
     "season_mode": False,
     "fail_on_empty_window": False,
-    "carton_factor_file": "./data/华润单品装箱数.xlsx",
+    "carton_factor_file": "./data/sku装箱数.xlsx",
     "brand_keywords": [],
+    "batch": {
+        "continue_on_error": True,
+        "summary_output_file": "./reports/batch_run_summary.xlsx",
+        "systems": [],
+    },
 }
 
 PREFERRED_WIDTHS = {
@@ -71,14 +81,34 @@ SUMMARY_ONE_DECIMAL_METRICS = {
     "预测平均日销总量(季节模式后)",
 }
 
+DEFAULT_LEGACY_OUTPUT_FILES = {
+    "./reports/inventory_risk_report.xlsx",
+    "reports/inventory_risk_report.xlsx",
+    "inventory_risk_report.xlsx",
+}
+
+AUTO_OUTPUT_DATE_PLACEHOLDER = "{库存日期}"
+
 
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    run_mode = str(config.get("run_mode", "single")).strip().lower()
+    if run_mode not in {"single", "batch"}:
+        raise ValueError("config.run_mode must be one of: single, batch.")
+    config["run_mode"] = run_mode
+
     if not isinstance(config.get("raw_data_dir"), str) or not str(config["raw_data_dir"]).strip():
         raise ValueError("config.raw_data_dir must be a non-empty string.")
-    if not isinstance(config.get("output_file"), str) or not str(config["output_file"]).strip():
-        raise ValueError("config.output_file must be a non-empty string.")
-    if not isinstance(config.get("inventory_file"), str) or not str(config["inventory_file"]).strip():
-        raise ValueError("config.inventory_file must be a non-empty string.")
+    display_name = config.get("display_name", "")
+    if display_name is not None and not isinstance(display_name, str):
+        raise ValueError("config.display_name must be a string.")
+    system_id = config.get("system_id", "")
+    if system_id is not None and not isinstance(system_id, str):
+        raise ValueError("config.system_id must be a string.")
+    if run_mode == "single":
+        if not isinstance(config.get("output_file"), str) or not str(config["output_file"]).strip():
+            raise ValueError("config.output_file must be a non-empty string in single mode.")
+        if not isinstance(config.get("inventory_file"), str) or not str(config["inventory_file"]).strip():
+            raise ValueError("config.inventory_file must be a non-empty string in single mode.")
     carton_factor_file = config.get("carton_factor_file", "")
     if not isinstance(carton_factor_file, str) or not carton_factor_file.strip():
         raise ValueError("config.carton_factor_file must be a non-empty string.")
@@ -129,15 +159,147 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if not all(isinstance(x, str) for x in brand_keywords):
         raise ValueError("brand_keywords entries must be strings.")
 
+    batch = config.get("batch", {})
+    if not isinstance(batch, dict):
+        raise ValueError("config.batch must be a dict.")
+    continue_on_error = batch.get("continue_on_error", True)
+    if not isinstance(continue_on_error, bool):
+        raise ValueError("config.batch.continue_on_error must be true/false.")
+    summary_output_file = batch.get("summary_output_file", "./reports/batch_run_summary.xlsx")
+    if not isinstance(summary_output_file, str) or not summary_output_file.strip():
+        raise ValueError("config.batch.summary_output_file must be a non-empty string.")
+    systems = batch.get("systems", [])
+    if not isinstance(systems, list):
+        raise ValueError("config.batch.systems must be a list.")
+    batch["continue_on_error"] = continue_on_error
+    batch["summary_output_file"] = summary_output_file
+    batch["systems"] = systems
+    config["batch"] = batch
     return config
 
 
+def validate_batch_config(config: Dict[str, Any]) -> None:
+    batch_cfg = config.get("batch", {})
+    systems = batch_cfg.get("systems", [])
+    if not systems:
+        raise ValueError("batch mode requires at least one system in config.batch.systems.")
+
+    seen_ids = set()
+    seen_display_names = set()
+    for idx, system in enumerate(systems, start=1):
+        if not isinstance(system, dict):
+            raise ValueError(f"batch.systems[{idx}] must be a dict.")
+        enabled = system.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"batch.systems[{idx}].enabled must be true/false.")
+        system_id = str(system.get("system_id", "")).strip()
+        display_name = system.get("display_name")
+        if not isinstance(display_name, str) or not display_name.strip():
+            raise ValueError(f"batch.systems[{idx}].display_name must be a non-empty string.")
+        normalized_display_name = display_name.strip()
+        if normalized_display_name in seen_display_names:
+            raise ValueError(f"Duplicated display_name in batch.systems: {normalized_display_name}")
+        seen_display_names.add(normalized_display_name)
+        identity = system_id or display_name.strip()
+        if identity in seen_ids:
+            raise ValueError(f"Duplicated identity in batch.systems: {identity}")
+        seen_ids.add(identity)
+        data_subdir = system.get("data_subdir")
+        if data_subdir is not None and (not isinstance(data_subdir, str) or not data_subdir.strip()):
+            raise ValueError(f"batch.systems[{idx}].data_subdir must be a non-empty string if provided.")
+        sales_files = system.get("sales_files")
+        if not isinstance(sales_files, list) or not sales_files:
+            raise ValueError(f"batch.systems[{idx}].sales_files must be a non-empty list.")
+        if not all(isinstance(x, str) and x.strip() for x in sales_files):
+            raise ValueError(f"batch.systems[{idx}].sales_files entries must be non-empty strings.")
+        inventory_file = system.get("inventory_file")
+        if not isinstance(inventory_file, str) or not inventory_file.strip():
+            raise ValueError(f"batch.systems[{idx}].inventory_file must be a non-empty string.")
+        output_file = system.get("output_file")
+        if output_file is not None and (not isinstance(output_file, str) or not output_file.strip()):
+            raise ValueError(f"batch.systems[{idx}].output_file must be a non-empty string if provided.")
+
+    # Prevent accidental overwrite from duplicated explicit output path.
+    seen_output_paths = set()
+    for idx, system in enumerate(systems, start=1):
+        output_file = system.get("output_file")
+        if not isinstance(output_file, str) or not output_file.strip():
+            continue
+        path = Path(output_file.strip())
+        normalized = str((BASE_DIR / path).resolve()) if not path.is_absolute() else str(path.resolve())
+        if normalized in seen_output_paths:
+            raise ValueError(f"Duplicated output_file in batch.systems[{idx}]: {output_file}")
+        seen_output_paths.add(normalized)
+
+
+def build_system_config(system_cfg: Dict[str, Any], global_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(global_cfg)
+    merged["enabled"] = bool(system_cfg.get("enabled", True))
+    merged["sales_files"] = list(system_cfg["sales_files"])
+    merged["inventory_file"] = str(system_cfg["inventory_file"]).strip()
+    merged["display_name"] = str(system_cfg["display_name"]).strip()
+    raw_system_id = str(system_cfg.get("system_id", "")).strip()
+    merged["system_id"] = raw_system_id or merged["display_name"]
+    raw_data_subdir = str(system_cfg.get("data_subdir", "")).strip()
+    merged["data_subdir"] = raw_data_subdir
+
+    output_file = system_cfg.get("output_file")
+    if isinstance(output_file, str) and output_file.strip():
+        merged["output_file"] = output_file.strip()
+    else:
+        merged["output_file"] = ""
+
+    carton_factor_file = system_cfg.get("carton_factor_file")
+    if isinstance(carton_factor_file, str) and carton_factor_file.strip():
+        merged["carton_factor_file"] = carton_factor_file.strip()
+
+    return validate_config(merged)
+
+
+def resolve_system_raw_data_dir(config: Dict[str, Any]) -> Path:
+    raw_data_dir = Path(config["raw_data_dir"])
+    if not raw_data_dir.is_absolute():
+        raw_data_dir = (BASE_DIR / raw_data_dir).resolve()
+    data_subdir = str(config.get("data_subdir", "")).strip()
+    if data_subdir:
+        raw_data_dir = (raw_data_dir / data_subdir).resolve()
+    return raw_data_dir
+
+
+def resolve_output_file_path(config: Dict[str, Any], display_name: str, inventory_date: str) -> Path:
+    configured_output = str(config.get("output_file", "")).strip()
+    inventory_date_compact = inventory_date.replace("-", "")
+    if (
+        not configured_output
+        or configured_output in DEFAULT_LEGACY_OUTPUT_FILES
+    ):
+        configured_output = f"./reports/{display_name}{inventory_date_compact}库存预警.xlsx"
+    output_file = Path(configured_output)
+    if not output_file.is_absolute():
+        output_file = (BASE_DIR / output_file).resolve()
+    return output_file
+
+
+def resolve_expected_output_for_status(config: Dict[str, Any], display_name: str) -> str:
+    configured_output = str(config.get("output_file", "")).strip()
+    if not configured_output or configured_output in DEFAULT_LEGACY_OUTPUT_FILES:
+        configured_output = f"./reports/{display_name}{AUTO_OUTPUT_DATE_PLACEHOLDER}库存预警.xlsx"
+    output_file = Path(configured_output)
+    if not output_file.is_absolute():
+        output_file = (BASE_DIR / output_file).resolve()
+    return str(output_file)
+
+
 def load_config() -> Dict[str, Any]:
-    config = DEFAULT_CONFIG.copy()
+    config = deepcopy(DEFAULT_CONFIG)
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f) or {}
-        config.update({k: loaded.get(k, v) for k, v in config.items()})
+        for key, value in loaded.items():
+            if key == "batch" and isinstance(value, dict):
+                config["batch"].update(value)
+            else:
+                config[key] = value
     return validate_config(config)
 
 
@@ -399,17 +561,13 @@ def apply_inventory_metrics(df: pd.DataFrame, low_days: float, high_days: float)
     return out
 
 
-def main() -> None:
-    config = load_config()
+def generate_report_for_system(system_cfg: Dict[str, Any], global_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    config = dict(system_cfg)
+    _ = global_cfg
+    system_id = str(config.get("system_id", "single")).strip() or "single"
+    display_name = str(config.get("display_name", system_id)).strip() or system_id
 
-    raw_data_dir = Path(config["raw_data_dir"])
-    if not raw_data_dir.is_absolute():
-        raw_data_dir = (BASE_DIR / raw_data_dir).resolve()
-
-    output_file = Path(config["output_file"])
-    if not output_file.is_absolute():
-        output_file = (BASE_DIR / output_file).resolve()
-    output_file.parent.mkdir(parents=True, exist_ok=True)
+    raw_data_dir = resolve_system_raw_data_dir(config)
 
     configured_sales_files = [f for f in config.get("sales_files") or []]
     inventory_file = config.get("inventory_file") or ""
@@ -451,6 +609,8 @@ def main() -> None:
         raise ValueError(f"Invalid inventory date: {inventory_date_text}")
     inventory_date_ts = pd.Timestamp(parsed_inventory_date).normalize()
     inventory_date = inventory_date_ts.date().isoformat()
+    output_file = resolve_output_file_path(config, display_name, inventory_date)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
     inv_df, inv_store, inv_brand, inv_product, inv_barcode, inv_qty = normalize_inventory_df(inv_df)
     if inv_brand is None:
         inv_df = inv_df.copy()
@@ -1003,7 +1163,7 @@ def main() -> None:
 
     def style_sheet(ws, sheet_name: str):
         ws.insert_rows(1)
-        title = f"库存日期：{inventory_date}"
+        title = f"{display_name} | 库存日期：{inventory_date}"
         ws.cell(row=1, column=1, value=title)
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
         ws.cell(row=1, column=1).font = Font(bold=True)
@@ -1111,8 +1271,128 @@ def main() -> None:
 
     wb.save(output_file)
 
-    print(f"Report saved: {output_file}")
+    print(f"[{display_name}] Report saved: {output_file}")
+    return {
+        "system_id": system_id,
+        "display_name": display_name,
+        "status": "SUCCESS",
+        "message": "",
+        "output_file": str(output_file),
+        "detail_rows": int(len(detail_out)),
+        "missing_rows": int(len(missing_out)),
+    }
+
+def run_batch(global_config: Dict[str, Any]) -> int:
+    validate_batch_config(global_config)
+    batch_cfg = global_config["batch"]
+    continue_on_error = bool(batch_cfg.get("continue_on_error", True))
+    summary_output_file = Path(batch_cfg.get("summary_output_file", "./reports/batch_run_summary.xlsx"))
+    if not summary_output_file.is_absolute():
+        summary_output_file = (BASE_DIR / summary_output_file).resolve()
+    summary_output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    records: List[Dict[str, Any]] = []
+    failure_count = 0
+    for system in batch_cfg.get("systems", []):
+        start_time = datetime.now()
+        enabled = bool(system.get("enabled", True))
+        display_name = str(system.get("display_name", system.get("system_id", "unknown")))
+        system_id = str(system.get("system_id", "")).strip() or display_name
+        data_subdir = str(system.get("data_subdir", "")).strip()
+        expected_output_file = resolve_expected_output_for_status(system, display_name)
+        merged_config: Optional[Dict[str, Any]] = None
+        try:
+            merged_config = build_system_config(system, global_config)
+            display_name = merged_config["display_name"]
+            system_id = merged_config["system_id"]
+            expected_output_file = resolve_expected_output_for_status(merged_config, display_name)
+        except Exception:
+            # Keep original fallback values for summary when config merge itself fails.
+            merged_config = None
+
+        if not enabled:
+            records.append(
+                {
+                    "system_id": system_id,
+                    "display_name": display_name,
+                    "enabled": False,
+                    "data_subdir": data_subdir,
+                    "status": "SKIPPED",
+                    "message": "disabled",
+                    "output_file": expected_output_file,
+                    "duration_sec": 0.0,
+                    "generated_at": datetime.now().isoformat(timespec="seconds"),
+                    "detail_rows": 0,
+                    "missing_rows": 0,
+                }
+            )
+            print(f"[{display_name}] Skipped: disabled")
+            continue
+        try:
+            if merged_config is None:
+                merged_config = build_system_config(system, global_config)
+                display_name = merged_config["display_name"]
+                system_id = merged_config["system_id"]
+                expected_output_file = resolve_expected_output_for_status(merged_config, display_name)
+            print(f"[{display_name}] Start generating report...")
+            record = generate_report_for_system(merged_config, global_config)
+        except Exception as exc:  # noqa: BLE001
+            failure_count += 1
+            record = {
+                "system_id": system_id,
+                "display_name": display_name,
+                "enabled": True,
+                "data_subdir": data_subdir,
+                "status": "FAILED",
+                "message": str(exc),
+                "output_file": expected_output_file,
+                "detail_rows": 0,
+                "missing_rows": 0,
+            }
+            print(f"[{display_name}] Failed: {exc}")
+            if not continue_on_error:
+                record["duration_sec"] = round((datetime.now() - start_time).total_seconds(), 3)
+                record["generated_at"] = datetime.now().isoformat(timespec="seconds")
+                records.append(record)
+                break
+
+        record["enabled"] = True
+        record["data_subdir"] = data_subdir
+        record["duration_sec"] = round((datetime.now() - start_time).total_seconds(), 3)
+        record["generated_at"] = datetime.now().isoformat(timespec="seconds")
+        records.append(record)
+
+    summary_df = pd.DataFrame(
+        records,
+        columns=[
+            "system_id",
+            "display_name",
+            "enabled",
+            "data_subdir",
+            "status",
+            "message",
+            "output_file",
+            "duration_sec",
+            "generated_at",
+            "detail_rows",
+            "missing_rows",
+        ],
+    )
+    summary_df.to_excel(summary_output_file, index=False)
+    print(f"Batch summary saved: {summary_output_file}")
+    return failure_count
+
+
+def main() -> int:
+    config = load_config()
+    run_mode = str(config.get("run_mode", "single")).lower()
+    if run_mode == "batch":
+        failures = run_batch(config)
+        return 1 if failures > 0 else 0
+
+    generate_report_for_system(config, config)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

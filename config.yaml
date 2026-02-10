@@ -1,3 +1,5 @@
+run_mode: "batch" # single: 单系统; batch: 多系统批量
+display_name: "陕西华润"
 raw_data_dir: "./raw_data"
 output_file: "./reports/inventory_risk_report.xlsx"
 
@@ -5,8 +7,9 @@ sales_files:
   - "202511.xlsx"
   - "202512.xlsx"
   - "202601.xlsx"
+  - "202602.xlsx"
 
-inventory_file: "库存.xlsx"
+inventory_file: "陕西华润库存.xlsx"
 
 risk_days_high: 60
 risk_days_low: 45
@@ -17,7 +20,7 @@ sales_date_dayfirst: false
 sales_date_format: ""
 season_mode: true # false: 淡季取低(min), true: 旺季取高(max)
 fail_on_empty_window: false
-carton_factor_file: "./data/华润单品装箱数.xlsx"
+carton_factor_file: "./data/sku装箱数.xlsx"
 
 brand_keywords:
   - "伊利"
@@ -37,3 +40,37 @@ brand_keywords:
   - "雀巢"
   - "Seesaw"
   - "佳贝艾特"
+
+batch:
+  continue_on_error: true
+  summary_output_file: "./reports/batch_run_summary.xlsx"
+  systems:
+    - enabled: false
+      system_id: "gansu_wumei"
+      display_name: "甘肃物美"
+      data_subdir: "甘肃物美"
+      sales_files:
+        - "202511.xlsx"
+        - "202512.xlsx"
+        - "202601.xlsx"
+      inventory_file: "库存.xlsx"
+      carton_factor_file: "./data/sku装箱数.xlsx"
+    - enabled: true
+      system_id: "shaanxi_huarun"
+      display_name: "陕西华润"
+      data_subdir: "陕西华润"
+      sales_files:
+        - "202511.xlsx"
+        - "202512.xlsx"
+        - "202601.xlsx"
+        - "202602.xlsx"
+      inventory_file: "陕西华润库存.xlsx"
+    - enabled: false
+      system_id: "gansu_huarun"
+      display_name: "甘肃华润"
+      data_subdir: "甘肃华润"
+      sales_files:
+        - "202511.xlsx"
+        - "202512.xlsx"
+        - "202601.xlsx"
+      inventory_file: "库存.xlsx"

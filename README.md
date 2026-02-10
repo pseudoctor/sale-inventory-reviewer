@@ -15,7 +15,18 @@ Required columns in inventory file:
 - If `品牌` is missing, it will be derived from `商品名称` in-memory for current run (source file is not modified).
 
 ## Output
-- `reports/inventory_risk_report.xlsx`
+- Single mode: one report (default: `reports/inventory_risk_report.xlsx`)
+- Batch mode: one report per system + `reports/batch_run_summary.xlsx`
+
+Report filename policy:
+- Auto naming (when `output_file` is empty or legacy default): `<系统名><库存日期>库存预警.xlsx`
+  - Example: `陕西华润20260208库存预警.xlsx`
+- Explicit naming (when `output_file` is provided): use exactly the configured filename.
+- Batch safety checks:
+  - duplicated `display_name` is rejected
+  - duplicated explicit `output_file` is rejected
+
+Each inventory report contains:
   - `明细`: 门店 → 品牌 → 商品层级（含近三月+本月迄今平均日销、近30天平均日销售、风险等级、周转指标、补货/调出建议）
   - `门店汇总`: 门店维度汇总
   - `品牌汇总`: 品牌维度汇总
@@ -31,7 +42,7 @@ Required columns in inventory file:
   - 旺季（`season_mode=true`）：`ceil(建议数量 / 装箱数)`
   - 淡季（`season_mode=false`）：`floor(建议数量 / 装箱数)`
 
-Each sheet adds a title in row 1: `库存日期：YYYY-MM-DD` (extracted from the inventory file),
+Each sheet adds a title in row 1: `<系统名称> | 库存日期：YYYY-MM-DD` (extracted from the inventory file),
 and applies header styling, filters, borders, risk color highlights, and out-of-stock row highlights.
 
 ## How to Run
@@ -43,12 +54,23 @@ and applies header styling, filters, borders, risk color highlights, and out-of-
 run.bat
 ```
 
-## Example workflow
+`run_mode` is controlled in `config.yaml`:
+- `single`: one system report
+- `batch`: multiple system reports in one run
+
+## Example workflow (single mode)
 1) Drop recent monthly sales files into `raw_data/` as `YYYYMM.xlsx`.
 2) Put the inventory snapshot as `raw_data/库存.xlsx` (with or without `品牌`).
 3) Update `config.yaml` if needed (files, thresholds, or brand keywords).
 4) Run `./run.sh`.
 5) Open `reports/inventory_risk_report.xlsx` to review the results.
+
+## Example workflow (batch mode)
+1) Put each system's files into its own subfolder under `raw_data/` (e.g. `raw_data/甘肃物美/`, `raw_data/陕西华润/`).
+2) Set `run_mode: "batch"`.
+3) Configure each system under `batch.systems` with `enabled`, `data_subdir`, `sales_files`, `inventory_file`, and `output_file`.
+4) Run `./run.sh`.
+5) Check each output report and `reports/batch_run_summary.xlsx` (includes `SUCCESS` / `FAILED` / `SKIPPED`).
 
 ## Risk Logic
 - `近三月+本月迄今平均日销` = 窗口销量总和 / 窗口有效天数
@@ -70,6 +92,8 @@ Edit `config.yaml` to update the sales file list, inventory file, and output pat
 You can also set `brand_keywords` to control how brand names are extracted from inventory product names.
 
 Key fields:
+- `run_mode`: `single` or `batch` (default `single`).
+- `display_name`: system display name used in sheet title and default output naming.
 - `sales_files`: optional explicit list of sales files; if empty, all `raw_data/*.xlsx` with `YYYYMM` in name are auto-detected.
 - `inventory_file`: inventory snapshot file name under `raw_data/`.
 - `risk_days_high` / `risk_days_low`: thresholds for risk classification.
@@ -82,6 +106,19 @@ Key fields:
   - `false`: use `min(近三月+本月迄今平均日销, 近30天平均日销售)` (off-peak)
   - `true`: use `max(近三月+本月迄今平均日销, 近30天平均日销售)` (peak)
 - `fail_on_empty_window`: if `true`, raise error when 3M+MTD or 30-day window has no overlapping sales data.
-- `carton_factor_file`: carton factor mapping file path (default `./data/华润单品装箱数.xlsx`).
+- `carton_factor_file`: carton factor mapping file path (default `./data/sku装箱数.xlsx`).
   - Required columns: `商品条码`, `商品名称`, `装箱数（因子）`
 - `brand_keywords`: list of brand names used to derive `品牌` from `商品名称` when missing.
+- `batch.continue_on_error`: in batch mode, continue remaining systems when one fails (`true`/`false`).
+- `batch.summary_output_file`: batch run summary output path.
+- `batch.systems`: explicit per-system config list:
+  - `enabled`: boolean switch (`false` -> `SKIPPED`, no report generated)
+  - `display_name` (Chinese simplified recommended), optional `system_id` machine key
+  - `data_subdir`: system-specific data folder under `raw_data_dir`
+  - `sales_files`, `inventory_file`, optional `output_file`
+  - optional `carton_factor_file` to override global default
+
+## Operations
+- Add a new system: create a new subfolder in `raw_data/`, add one entry in `batch.systems`, set `enabled: true`.
+- Disable a system temporarily: set `enabled: false` (keeps config/history, status becomes `SKIPPED`).
+- Remove a system permanently: delete the entry from `batch.systems`.
