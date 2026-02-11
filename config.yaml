@@ -4,10 +4,10 @@ raw_data_dir: "./raw_data"
 output_file: "./reports/inventory_risk_report.xlsx"
 
 sales_files:
-  - "202511.xlsx"
-  - "202512.xlsx"
-  - "202601.xlsx"
-  - "202602.xlsx"
+  - "陕西华润销售202511.xlsx"
+  - "陕西华润销售202512.xlsx"
+  - "陕西华润销售202601.xlsx"
+  - "陕西华润销售202602.xlsx"
 
 inventory_file: "陕西华润库存.xlsx"
 
@@ -20,7 +20,9 @@ sales_date_dayfirst: false
 sales_date_format: ""
 season_mode: true # false: 淡季取低(min), true: 旺季取高(max)
 fail_on_empty_window: false
+strict_auto_scan: false # true: 自动扫描模式下若候选为空且存在疑似销售文件则直接报错
 carton_factor_file: "./data/sku装箱数.xlsx"
+province_column_enabled: false
 
 brand_keywords:
   - "伊利"
@@ -45,32 +47,29 @@ batch:
   continue_on_error: true
   summary_output_file: "./reports/batch_run_summary.xlsx"
   systems:
-    - enabled: false
+    - enabled: true
       system_id: "gansu_wumei"
-      display_name: "甘肃物美"
-      data_subdir: "甘肃物美"
+      display_name: "宁夏物美"
+      province_column_enabled: true
+      data_subdir: "宁夏物美"
       sales_files:
-        - "202511.xlsx"
-        - "202512.xlsx"
-        - "202601.xlsx"
-      inventory_file: "库存.xlsx"
+        - "物美销售20260209.xls"
+      inventory_file: "物美库存20260209.xls"
       carton_factor_file: "./data/sku装箱数.xlsx"
     - enabled: true
       system_id: "shaanxi_huarun"
       display_name: "陕西华润"
       data_subdir: "陕西华润"
       sales_files:
-        - "202511.xlsx"
-        - "202512.xlsx"
-        - "202601.xlsx"
-        - "202602.xlsx"
+        - "陕西华润销售202511.xlsx"
+        - "陕西华润销售202512.xlsx"
+        - "陕西华润销售202601.xlsx"
+        - "陕西华润销售202602.xlsx"
       inventory_file: "陕西华润库存.xlsx"
     - enabled: false
       system_id: "gansu_huarun"
       display_name: "甘肃华润"
       data_subdir: "甘肃华润"
       sales_files:
-        - "202511.xlsx"
-        - "202512.xlsx"
-        - "202601.xlsx"
-      inventory_file: "库存.xlsx"
+        - "甘肃华润202602.xlsx"
+      inventory_file: "甘肃华润202602.xlsx"

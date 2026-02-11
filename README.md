@@ -30,11 +30,12 @@ Each inventory report contains:
   - `明细`: 门店 → 品牌 → 商品层级（含近三月+本月迄今平均日销、近30天平均日销售、风险等级、周转指标、补货/调出建议）
   - `门店汇总`: 门店维度汇总
   - `品牌汇总`: 品牌维度汇总
-  - `缺货清单`: 有销量但库存缺失的 SKU（含建议补货数量、建议补货箱数）
+  - `缺货清单`: 明细中“有销量且库存=0”的 SKU（含建议补货数量、建议补货箱数）
   - `建议补货清单`: 建议补货数量 > 0 的 SKU
   - `建议调货清单`: 建议调出数量 > 0 的 SKU
   - `汇总`: 风险等级统计、缺货 SKU 数、库存总量、近三月+本月迄今日销总量、近30天日销总量、预测日销总量
-  - `运行状态`: 季节模式、窗口有效性、无效日期行数、装箱因子缺失行数
+  - `运行状态`: 程序版本、配置快照、输入文件统计、窗口有效性、无效日期行数、装箱因子缺失行数、自动扫描忽略清单
+  - `库存缺失SKU清单`: 销售侧存在但库存侧未匹配到的 SKU（不是“库存=0”，而是“库存数据里缺记录”）
 
 `建议补货清单` 与 `建议调货清单` 会额外包含：
 - `装箱数（因子）`
@@ -70,7 +71,7 @@ run.bat
 2) Set `run_mode: "batch"`.
 3) Configure each system under `batch.systems` with `enabled`, `data_subdir`, `sales_files`, `inventory_file`, and `output_file`.
 4) Run `./run.sh`.
-5) Check each output report and `reports/batch_run_summary.xlsx` (includes `SUCCESS` / `FAILED` / `SKIPPED`).
+5) Check each output report and `reports/batch_run_summary.xlsx` (includes `SUCCESS` / `FAILED` / `SKIPPED`, plus `error_stage` / `input_files_count` diagnostics).
 
 ## Risk Logic
 - `近三月+本月迄今平均日销` = 窗口销量总和 / 窗口有效天数
@@ -106,6 +107,9 @@ Key fields:
   - `false`: use `min(近三月+本月迄今平均日销, 近30天平均日销售)` (off-peak)
   - `true`: use `max(近三月+本月迄今平均日销, 近30天平均日销售)` (peak)
 - `fail_on_empty_window`: if `true`, raise error when 3M+MTD or 30-day window has no overlapping sales data.
+- `strict_auto_scan`: only for auto-scan mode (`sales_files` empty).
+  - `false` (default): normal auto-scan behavior.
+  - `true`: when no valid sales files are detected and suspicious candidates were ignored, fail fast with ignored file list.
 - `carton_factor_file`: carton factor mapping file path (default `./data/sku装箱数.xlsx`).
   - Required columns: `商品条码`, `商品名称`, `装箱数（因子）`
 - `brand_keywords`: list of brand names used to derive `品牌` from `商品名称` when missing.

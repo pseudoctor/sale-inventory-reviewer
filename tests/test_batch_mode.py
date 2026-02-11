@@ -200,11 +200,49 @@ class BatchModeTest(unittest.TestCase):
         self.assertEqual(merged["carton_factor_file"], "./data/global_carton.xlsx")
         self.assertEqual(merged["system_id"], "系统一")
         self.assertEqual(merged["data_subdir"], "系统一")
+        self.assertIsNone(merged.get("province_column_enabled"))
+
+    def test_build_system_config_allows_province_column_override(self):
+        global_cfg = validate_config(
+            {
+                "run_mode": "batch",
+                "raw_data_dir": "./raw_data",
+                "output_file": "./reports/inventory_risk_report.xlsx",
+                "sales_files": [],
+                "inventory_file": "",
+                "risk_days_high": 60,
+                "risk_days_low": 45,
+                "sales_window_full_months": 3,
+                "sales_window_include_mtd": True,
+                "sales_window_recent_days": 30,
+                "sales_date_dayfirst": False,
+                "sales_date_format": "",
+                "season_mode": False,
+                "fail_on_empty_window": False,
+                "carton_factor_file": "./data/global_carton.xlsx",
+                "brand_keywords": [],
+                "province_column_enabled": False,
+                "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
+            }
+        )
+        system_cfg = {
+            "display_name": "系统一",
+            "sales_files": ["sales.xlsx"],
+            "inventory_file": "inv.xlsx",
+            "province_column_enabled": True,
+        }
+        merged = build_system_config(system_cfg, global_cfg)
+        self.assertTrue(merged["province_column_enabled"])
 
     def test_resolve_system_raw_data_dir_with_subdir(self):
-        cfg = {"raw_data_dir": "./raw_data", "data_subdir": "甘肃物美"}
+        cfg = {"raw_data_dir": "./raw_data", "data_subdir": "宁夏物美"}
         path = resolve_system_raw_data_dir(cfg)
-        self.assertTrue(str(path).endswith("raw_data/甘肃物美"))
+        self.assertTrue(str(path).endswith("raw_data/宁夏物美"))
+
+    def test_resolve_system_raw_data_dir_raises_for_missing_subdir(self):
+        cfg = {"raw_data_dir": "./raw_data", "data_subdir": "不存在的系统目录"}
+        with self.assertRaises(FileNotFoundError):
+            resolve_system_raw_data_dir(cfg)
 
     def test_resolve_output_file_path_respects_explicit_output(self):
         cfg = {"output_file": "./reports/陕西华润_inventory_risk_report.xlsx"}
@@ -279,7 +317,7 @@ class BatchModeTest(unittest.TestCase):
                     "message": "",
                     "output_file": "./reports/b.xlsx",
                     "detail_rows": 12,
-                    "missing_rows": 2,
+                    "missing_sku_rows": 2,
                 }
 
             with patch("scripts.generate_inventory_risk_report.generate_report_for_system", side_effect=fake_generate):
@@ -293,6 +331,8 @@ class BatchModeTest(unittest.TestCase):
             self.assertIn("SUCCESS", summary["status"].tolist())
             self.assertIn("data_subdir", summary.columns)
             self.assertIn("enabled", summary.columns)
+            self.assertIn("error_stage", summary.columns)
+            self.assertIn("input_files_count", summary.columns)
 
     def test_run_batch_enabled_false_becomes_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -339,6 +379,8 @@ class BatchModeTest(unittest.TestCase):
             summary = pd.read_excel(summary_path)
             self.assertEqual(summary.iloc[0]["status"], "SKIPPED")
             self.assertEqual(summary.iloc[0]["message"], "disabled")
+            self.assertIn("error_stage", summary.columns)
+            self.assertIn("input_files_count", summary.columns)
 
     def test_run_batch_continue_on_error_false(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -398,6 +440,8 @@ class BatchModeTest(unittest.TestCase):
             summary = pd.read_excel(summary_path)
             self.assertEqual(len(summary), 1)
             self.assertEqual(summary.iloc[0]["status"], "FAILED")
+            self.assertIn("error_stage", summary.columns)
+            self.assertIn("input_files_count", summary.columns)
 
 
 if __name__ == "__main__":

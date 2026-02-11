@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -9,7 +10,12 @@ from scripts.generate_inventory_risk_report import (
     classify_risk_levels,
     combine_daily_sales,
     compute_case_counts,
+    list_ignored_sales_files,
+    map_province_by_supplier_card,
     normalize_barcode_value,
+    normalize_inventory_df,
+    normalize_sales_df,
+    read_excel_first_sheet,
     overlap_days,
     parse_sales_dates,
     resolve_sales_candidates,
@@ -32,6 +38,25 @@ class CoreCalculationsTest(unittest.TestCase):
                     "sales_window_include_mtd": True,
                     "sales_window_recent_days": 30,
                     "season_mode": False,
+                    "brand_keywords": [],
+                }
+            )
+
+    def test_validate_config_rejects_invalid_strict_auto_scan_type(self):
+        with self.assertRaises(ValueError):
+            validate_config(
+                {
+                    "raw_data_dir": "./raw_data",
+                    "output_file": "./reports/x.xlsx",
+                    "sales_files": [],
+                    "inventory_file": "库存.xlsx",
+                    "risk_days_high": 60,
+                    "risk_days_low": 45,
+                    "sales_window_full_months": 3,
+                    "sales_window_include_mtd": True,
+                    "sales_window_recent_days": 30,
+                    "season_mode": False,
+                    "strict_auto_scan": "yes",
                     "brand_keywords": [],
                 }
             )
@@ -103,6 +128,29 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(peak.tolist(), [3, 2, 0])
         self.assertEqual(off_peak.tolist(), [2, 1, 0])
 
+    def test_map_province_by_supplier_card(self):
+        self.assertEqual(map_province_by_supplier_card("153085"), "宁夏")
+        self.assertEqual(map_province_by_supplier_card("680249.0"), "甘肃")
+        self.assertEqual(map_province_by_supplier_card("153412"), "宁夏")
+        self.assertEqual(map_province_by_supplier_card("152901"), "监狱系统")
+        self.assertEqual(map_province_by_supplier_card("999999"), "其他/未知")
+        self.assertEqual(map_province_by_supplier_card(None), "其他/未知")
+
+    def test_normalize_inventory_df_supports_current_inventory_column(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店"],
+                "商品名称": ["SKU1"],
+                "商品条码": ["123"],
+                "当前库存": ["10"],
+                "供商卡号": ["153085"],
+            }
+        )
+        out_df, _, _, _, _, qty_col, supplier_col = normalize_inventory_df(df)
+        self.assertEqual(qty_col, "当前库存")
+        self.assertEqual(supplier_col, "供商卡号")
+        self.assertEqual(float(out_df[qty_col].iloc[0]), 10.0)
+
     def test_resolve_sales_candidates_respects_configured_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -115,14 +163,109 @@ class CoreCalculationsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "foo.txt").touch()
-            jan = root / "202601.xlsx"
-            dec = root / "202512.xlsx"
+            jan = root / "销售202601.xlsx"
+            dec = root / "销售202512.xlsx"
+            feb_xls = root / "销售202602.xls"
             bad = root / "sales.xlsx"
+            inv = root / "库存202602.xlsx"
             jan.touch()
             dec.touch()
+            feb_xls.touch()
             bad.touch()
+            inv.touch()
             out = resolve_sales_candidates(root, [])
-            self.assertEqual(out, [dec, jan])
+            self.assertEqual(out, [dec, jan, feb_xls])
+
+    def test_list_ignored_sales_files_reports_non_sales_and_inventory_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "库存202601.xlsx").touch()
+            (root / "202601.xlsx").touch()
+            (root / "销售文件.xlsx").touch()
+            ignored = list_ignored_sales_files(root, [])
+            self.assertTrue(any("inventory-like" in x for x in ignored))
+            self.assertTrue(any("missing sales keyword" in x for x in ignored))
+
+    def test_normalize_sales_df_allows_missing_brand_column(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店"],
+                "商品名称": ["SKU1"],
+                "商品条码": ["123"],
+                "销售数量": ["2"],
+                "销售时间": ["2026-02-01"],
+            }
+        )
+        _, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_col = normalize_sales_df(df)
+        self.assertEqual(store_col, "门店名称")
+        self.assertIsNone(brand_col)
+        self.assertEqual(product_col, "商品名称")
+        self.assertEqual(barcode_col, "商品条码")
+        self.assertEqual(qty_col, "销售数量")
+        self.assertEqual(date_col, "销售时间")
+        self.assertIsNone(supplier_col)
+
+    def test_normalize_sales_df_supports_national_barcode_only(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店"],
+                "商品名称": ["SKU1"],
+                "国条码": ["6901234567890"],
+                "销售数量": ["2"],
+                "销售时间": ["2026-02-01"],
+            }
+        )
+        _, _, _, _, barcode_col, _, _, _ = normalize_sales_df(df)
+        self.assertEqual(barcode_col, "国条码")
+
+    def test_normalize_sales_df_prefers_national_barcode_when_multiple_exist(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店"],
+                "商品名称": ["SKU1"],
+                "国条码": ["6901234567890"],
+                "商品编码": ["871602"],
+                "销售数量": ["2"],
+                "销售时间": ["2026-02-01"],
+            }
+        )
+        _, _, _, _, barcode_col, _, _, _ = normalize_sales_df(df)
+        self.assertEqual(barcode_col, "国条码")
+
+    def test_normalize_inventory_df_supports_national_barcode_only(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店"],
+                "商品名称": ["SKU1"],
+                "国条码": ["6901234567890"],
+                "当前库存": ["10"],
+            }
+        )
+        out_df, _, _, _, barcode_col, qty_col, _ = normalize_inventory_df(df)
+        self.assertEqual(barcode_col, "国条码")
+        self.assertEqual(qty_col, "当前库存")
+        self.assertEqual(float(out_df[qty_col].iloc[0]), 10.0)
+
+    def test_normalize_inventory_df_prefers_national_barcode_when_multiple_exist(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店"],
+                "商品名称": ["SKU1"],
+                "国条码": ["6901234567890"],
+                "商品编码": ["871602"],
+                "当前库存": ["10"],
+            }
+        )
+        _, _, _, _, barcode_col, _, _ = normalize_inventory_df(df)
+        self.assertEqual(barcode_col, "国条码")
+
+    def test_read_excel_first_sheet_requires_xlrd_for_xls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "test.xls"
+            path.touch()
+            with patch("scripts.core.io.importlib.util.find_spec", return_value=None):
+                with self.assertRaises(ModuleNotFoundError):
+                    read_excel_first_sheet(path)
 
 
 if __name__ == "__main__":

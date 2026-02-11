@@ -18,6 +18,13 @@ else
   source venv/bin/activate
 fi
 
-python scripts/generate_inventory_risk_report.py
+# Ensure required runtime deps exist even for old pre-created venv.
+if ! python3 -c "import pandas, openpyxl, yaml, xlrd" >/dev/null 2>&1; then
+  echo "Installing missing dependencies from requirements.txt ..."
+  pip install -r requirements.txt
+fi
 
-echo "Report written to: reports/inventory_risk_report.xlsx"
+python3 scripts/generate_inventory_risk_report.py
+
+echo "Generation complete. Reports written under: reports/"
+echo "Batch mode summary: reports/batch_run_summary.xlsx"
