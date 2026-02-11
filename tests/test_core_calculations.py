@@ -21,6 +21,7 @@ from scripts.generate_inventory_risk_report import (
     resolve_sales_candidates,
     validate_config,
 )
+from scripts.core import pipeline as core_pipeline
 
 
 class CoreCalculationsTest(unittest.TestCase):
@@ -217,6 +218,17 @@ class CoreCalculationsTest(unittest.TestCase):
         )
         _, _, _, _, barcode_col, _, _, _ = normalize_sales_df(df)
         self.assertEqual(barcode_col, "国条码")
+
+    def test_load_carton_factor_cached_hits_loader_once(self):
+        core_pipeline._CARTON_FACTOR_CACHE.clear()
+        fake_path = Path("/tmp/fake_factor.xlsx")
+        fake_df = pd.DataFrame({"商品条码": ["1"], "商品名称": ["A"], "装箱数（因子）": [6]})
+        with patch("scripts.core.pipeline.core_io.load_carton_factor_df", return_value=fake_df) as mocked:
+            out1 = core_pipeline._load_carton_factor_cached(fake_path)
+            out2 = core_pipeline._load_carton_factor_cached(fake_path)
+        self.assertIs(out1, fake_df)
+        self.assertIs(out2, fake_df)
+        self.assertEqual(mocked.call_count, 1)
 
     def test_normalize_sales_df_prefers_national_barcode_when_multiple_exist(self):
         df = pd.DataFrame(

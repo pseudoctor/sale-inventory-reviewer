@@ -3,6 +3,9 @@
 Generates an Excel risk report based on windowed daily sales and the current inventory snapshot,
 with risk levels, summaries, and automatic styling.
 
+## Operations Manual
+- Final operations playbook: `docs/运维操作手册.md`
+
 ## Inputs
 - Monthly sales Excel files (default: `raw_data/YYYYMM.xlsx`)
 - Inventory Excel file with store dimension
@@ -55,6 +58,11 @@ and applies header styling, filters, borders, risk color highlights, and out-of-
 run.bat
 ```
 
+Install pinned dependencies manually if needed:
+```bash
+python3 -m pip install -r requirements.lock
+```
+
 `run_mode` is controlled in `config.yaml`:
 - `single`: one system report
 - `batch`: multiple system reports in one run
@@ -71,7 +79,25 @@ run.bat
 2) Set `run_mode: "batch"`.
 3) Configure each system under `batch.systems` with `enabled`, `data_subdir`, `sales_files`, `inventory_file`, and `output_file`.
 4) Run `./run.sh`.
-5) Check each output report and `reports/batch_run_summary.xlsx` (includes `SUCCESS` / `FAILED` / `SKIPPED`, plus `error_stage` / `input_files_count` diagnostics).
+5) Check each output report and `reports/batch_run_summary.xlsx` (includes `SUCCESS` / `FAILED` / `SKIPPED`, plus `error_stage` / `input_files_count` / `loaded_sales_files` / `missing_sales_files` / `inventory_file_exists` diagnostics).
+
+## Health Check
+- Run preflight manually:
+```bash
+python3 scripts/health_check.py
+```
+- `run.sh` / `run.bat` also execute health check automatically before report generation.
+
+## Testing
+- Full regression:
+```bash
+python3 -m pytest -q
+```
+- Golden snapshot E2E (stable output contract for key sheets):
+```bash
+python3 -m pytest -q tests/test_e2e_golden_snapshot.py
+```
+- CI is provided via GitHub Actions: `.github/workflows/ci.yml` (runs lockfile install + ruff + py_compile + pytest).
 
 ## Risk Logic
 - `近三月+本月迄今平均日销` = 窗口销量总和 / 窗口有效天数

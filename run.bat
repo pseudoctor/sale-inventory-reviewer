@@ -23,19 +23,32 @@ if not defined PY_CMD (
 if not exist "venv\" (
   %PY_CMD% -m venv venv
   call venv\Scripts\activate.bat
-  %PY_CMD% -m pip install --upgrade pip
-  pip install -r requirements.txt
+  python -m pip install --upgrade pip
+  set "REQ_FILE=requirements.txt"
+  if exist "requirements.lock" set "REQ_FILE=requirements.lock"
+  pip install -r !REQ_FILE!
 ) else (
   call venv\Scripts\activate.bat
 )
 
-%PY_CMD% -c "import pandas, openpyxl, yaml, xlrd" >nul 2>&1
+python -c "import pandas, openpyxl, yaml, xlrd" >nul 2>&1
 if errorlevel 1 (
-  echo Installing missing dependencies from requirements.txt ...
-  pip install -r requirements.txt
+  set "REQ_FILE=requirements.txt"
+  if exist "requirements.lock" set "REQ_FILE=requirements.lock"
+  echo Installing missing dependencies from !REQ_FILE! ...
+  pip install -r !REQ_FILE!
 )
 
-%PY_CMD% scripts\generate_inventory_risk_report.py
+python scripts\health_check.py
+if errorlevel 1 (
+  echo Health check failed. Please fix issues above before generating report.
+  if /I not "%CI%"=="true" (
+    if /I not "%NO_PAUSE%"=="1" pause
+  )
+  exit /b 1
+)
+
+python scripts\generate_inventory_risk_report.py
 
 echo Generation complete. Reports written under: reports\
 echo Batch mode summary: reports\batch_run_summary.xlsx

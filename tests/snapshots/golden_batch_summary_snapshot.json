@@ -1,0 +1,47 @@
+[
+  {
+    "system_id": "sys_a",
+    "display_name": "系统A",
+    "enabled": true,
+    "status": "SUCCESS",
+    "message": null,
+    "error_stage": null,
+    "output_file": "系统A20260209库存预警.xlsx",
+    "input_files_count": 4,
+    "loaded_sales_files": 3,
+    "missing_sales_files": 0,
+    "inventory_file_exists": true,
+    "detail_rows": 123,
+    "missing_sku_rows": 7
+  },
+  {
+    "system_id": "sys_b",
+    "display_name": "系统B",
+    "enabled": false,
+    "status": "SKIPPED",
+    "message": "disabled",
+    "error_stage": null,
+    "output_file": "系统B{库存日期}库存预警.xlsx",
+    "input_files_count": 0,
+    "loaded_sales_files": 0,
+    "missing_sales_files": 0,
+    "inventory_file_exists": false,
+    "detail_rows": 0,
+    "missing_sku_rows": 0
+  },
+  {
+    "system_id": "sys_c",
+    "display_name": "系统C",
+    "enabled": true,
+    "status": "FAILED",
+    "message": "Inventory file not found",
+    "error_stage": "input_read",
+    "output_file": "系统C{库存日期}库存预警.xlsx",
+    "input_files_count": 0,
+    "loaded_sales_files": 0,
+    "missing_sales_files": 0,
+    "inventory_file_exists": false,
+    "detail_rows": 0,
+    "missing_sku_rows": 0
+  }
+]

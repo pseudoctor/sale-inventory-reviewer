@@ -14,9 +14,33 @@ from scripts.generate_inventory_risk_report import (
     validate_batch_config,
     validate_config,
 )
+from scripts.core import config as core_config
 
 
 class BatchModeTest(unittest.TestCase):
+    def test_validate_config_single_allows_empty_output_file_for_auto_naming(self):
+        cfg = {
+            "run_mode": "single",
+            "raw_data_dir": "./raw_data",
+            "output_file": "",
+            "sales_files": [],
+            "inventory_file": "库存.xlsx",
+            "risk_days_high": 60,
+            "risk_days_low": 45,
+            "sales_window_full_months": 3,
+            "sales_window_include_mtd": True,
+            "sales_window_recent_days": 30,
+            "sales_date_dayfirst": False,
+            "sales_date_format": "",
+            "season_mode": False,
+            "fail_on_empty_window": False,
+            "carton_factor_file": "./data/sku装箱数.xlsx",
+            "brand_keywords": [],
+            "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
+        }
+        out = validate_config(cfg)
+        self.assertEqual(out["output_file"], "")
+
     def test_validate_config_single_backward_compatible(self):
         cfg = {
             "raw_data_dir": "./raw_data",
@@ -166,6 +190,36 @@ class BatchModeTest(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             validate_batch_config(cfg)
+
+    def test_validate_batch_config_allows_disabled_system_without_files(self):
+        cfg = core_config.validate_config(
+            {
+                "run_mode": "batch",
+                "raw_data_dir": "./raw_data",
+                "output_file": "./reports/inventory_risk_report.xlsx",
+                "sales_files": [],
+                "inventory_file": "",
+                "risk_days_high": 60,
+                "risk_days_low": 45,
+                "sales_window_full_months": 3,
+                "sales_window_include_mtd": True,
+                "sales_window_recent_days": 30,
+                "sales_date_dayfirst": False,
+                "sales_date_format": "",
+                "season_mode": False,
+                "fail_on_empty_window": False,
+                "carton_factor_file": "./data/sku装箱数.xlsx",
+                "brand_keywords": [],
+                "batch": {
+                    "continue_on_error": True,
+                    "summary_output_file": "./reports/batch_run_summary.xlsx",
+                    "systems": [
+                        {"display_name": "停用占位系统", "enabled": False},
+                    ],
+                },
+            }
+        )
+        core_config.validate_batch_config(cfg, Path.cwd())
 
     def test_build_system_config_uses_default_output_and_carton(self):
         global_cfg = validate_config(
@@ -333,6 +387,9 @@ class BatchModeTest(unittest.TestCase):
             self.assertIn("enabled", summary.columns)
             self.assertIn("error_stage", summary.columns)
             self.assertIn("input_files_count", summary.columns)
+            self.assertIn("loaded_sales_files", summary.columns)
+            self.assertIn("missing_sales_files", summary.columns)
+            self.assertIn("inventory_file_exists", summary.columns)
 
     def test_run_batch_enabled_false_becomes_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -381,6 +438,9 @@ class BatchModeTest(unittest.TestCase):
             self.assertEqual(summary.iloc[0]["message"], "disabled")
             self.assertIn("error_stage", summary.columns)
             self.assertIn("input_files_count", summary.columns)
+            self.assertIn("loaded_sales_files", summary.columns)
+            self.assertIn("missing_sales_files", summary.columns)
+            self.assertIn("inventory_file_exists", summary.columns)
 
     def test_run_batch_continue_on_error_false(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -442,6 +502,9 @@ class BatchModeTest(unittest.TestCase):
             self.assertEqual(summary.iloc[0]["status"], "FAILED")
             self.assertIn("error_stage", summary.columns)
             self.assertIn("input_files_count", summary.columns)
+            self.assertIn("loaded_sales_files", summary.columns)
+            self.assertIn("missing_sales_files", summary.columns)
+            self.assertIn("inventory_file_exists", summary.columns)
 
 
 if __name__ == "__main__":

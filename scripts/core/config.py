@@ -56,9 +56,14 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     system_id = config.get("system_id", "")
     if system_id is not None and not isinstance(system_id, str):
         raise ValueError("config.system_id must be a string.")
+    output_file = config.get("output_file", "")
+    if output_file is None:
+        output_file = ""
+    if not isinstance(output_file, str):
+        raise ValueError("config.output_file must be a string.")
+    config["output_file"] = output_file.strip()
+
     if run_mode == "single":
-        if not isinstance(config.get("output_file"), str) or not str(config["output_file"]).strip():
-            raise ValueError("config.output_file must be a non-empty string in single mode.")
         if not isinstance(config.get("inventory_file"), str) or not str(config["inventory_file"]).strip():
             raise ValueError("config.inventory_file must be a non-empty string in single mode.")
 

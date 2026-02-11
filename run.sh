@@ -13,17 +13,26 @@ if [ ! -d "venv" ]; then
   python3 -m venv venv
   source venv/bin/activate
   pip install --upgrade pip
-  pip install -r requirements.txt
+  REQ_FILE="requirements.txt"
+  if [ -f "requirements.lock" ]; then
+    REQ_FILE="requirements.lock"
+  fi
+  pip install -r "$REQ_FILE"
 else
   source venv/bin/activate
 fi
 
 # Ensure required runtime deps exist even for old pre-created venv.
 if ! python3 -c "import pandas, openpyxl, yaml, xlrd" >/dev/null 2>&1; then
-  echo "Installing missing dependencies from requirements.txt ..."
-  pip install -r requirements.txt
+  REQ_FILE="requirements.txt"
+  if [ -f "requirements.lock" ]; then
+    REQ_FILE="requirements.lock"
+  fi
+  echo "Installing missing dependencies from ${REQ_FILE} ..."
+  pip install -r "$REQ_FILE"
 fi
 
+python3 scripts/health_check.py
 python3 scripts/generate_inventory_risk_report.py
 
 echo "Generation complete. Reports written under: reports/"
