@@ -64,6 +64,10 @@ def _check_config_and_paths() -> list[str]:
     if not raw_data_dir.exists():
         errors.append(f"raw_data_dir not found: {raw_data_dir}")
 
+    configured_brand_keywords = [str(x).strip() for x in (config.get("brand_keywords") or []) if str(x).strip()]
+    if not configured_brand_keywords:
+        errors.append("brand_keywords is empty. Configure at least one brand keyword in config.yaml.")
+
     run_mode = str(config.get("run_mode", "single")).lower()
     if run_mode == "batch":
         try:
@@ -77,6 +81,11 @@ def _check_config_and_paths() -> list[str]:
                 continue
             try:
                 merged = core_config.build_system_config(system, config)
+                merged_brand_keywords = [str(x).strip() for x in (merged.get("brand_keywords") or []) if str(x).strip()]
+                if not merged_brand_keywords:
+                    errors.append(
+                        f"batch.systems[{idx}] '{merged['display_name']}' brand_keywords is empty."
+                    )
                 system_raw = core_config.resolve_system_raw_data_dir(merged, BASE_DIR)
                 sales_files = [system_raw / name for name in merged.get("sales_files", [])]
                 missing_sales = [str(p.name) for p in sales_files if not p.exists()]

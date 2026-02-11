@@ -11,11 +11,12 @@ with risk levels, summaries, and automatic styling.
 - Inventory Excel file with store dimension
 
 Required columns in sales files:
-- `销售时间`, `门店名称`, `品牌`, `商品名称`, `商品条码` (or `商品编码`/`商品编码.1`), `销售数量`
+- `销售时间`, `门店名称`, `商品名称`, `商品条码` (or `商品编码`/`商品编码.1`), `销售数量`
+- `品牌` is optional; when missing or blank, brand is auto-derived from `商品名称` using `config.yaml -> brand_keywords` (fallback `其他`).
 
 Required columns in inventory file:
 - `门店名称`, `商品名称`, `商品条码` (or `商品编码`/`商品编码.1`), `数量`
-- If `品牌` is missing, it will be derived from `商品名称` in-memory for current run (source file is not modified).
+- `品牌` is optional; when missing or blank, brand is auto-derived from `商品名称` in-memory for current run (source file is not modified).
 
 ## Output
 - Single mode: one report (default: `reports/inventory_risk_report.xlsx`)
@@ -139,6 +140,9 @@ Key fields:
 - `carton_factor_file`: carton factor mapping file path (default `./data/sku装箱数.xlsx`).
   - Required columns: `商品条码`, `商品名称`, `装箱数（因子）`
 - `brand_keywords`: list of brand names used to derive `品牌` from `商品名称` when missing.
+  - Also used to backfill blank `品牌` cells.
+  - If multiple keywords match one product name, the brand whose match appears earliest in the product name is used.
+  - Must not be empty. Empty list will fail health check and report generation to avoid silent brand distortion.
 - `batch.continue_on_error`: in batch mode, continue remaining systems when one fails (`true`/`false`).
 - `batch.summary_output_file`: batch run summary output path.
 - `batch.systems`: explicit per-system config list:

@@ -22,26 +22,6 @@ SUPPLIER_CARD_PROVINCE_MAP = {
     "152901": "监狱系统",
 }
 
-DEFAULT_BRAND_KEYWORDS = [
-    "伊利",
-    "蒙牛",
-    "南国",
-    "阿宝乐",
-    "畅鲜选",
-    "蜀珑珠",
-    "永璞",
-    "雅士利",
-    "大漠银根",
-    "谷栗村",
-    "君乐宝",
-    "秦俑",
-    "红色拖拉机",
-    "飞鹤",
-    "雀巢",
-    "Seesaw",
-    "佳贝艾特",
-]
-
 _CARTON_FACTOR_CACHE: Dict[Path, pd.DataFrame] = {}
 
 
@@ -83,7 +63,9 @@ def _parse_season_mode(season_mode_raw: Any) -> bool:
 
 def _effective_brand_keywords(config: Dict[str, Any]) -> List[str]:
     brand_keywords = [str(b).strip() for b in (config.get("brand_keywords") or []) if str(b).strip()]
-    return brand_keywords or DEFAULT_BRAND_KEYWORDS
+    if not brand_keywords:
+        raise ValueError("brand_keywords cannot be empty. Please configure at least one brand keyword in config.yaml.")
+    return brand_keywords
 
 
 def _load_carton_factor_cached(path: Path) -> pd.DataFrame:
@@ -139,11 +121,7 @@ def _load_sales_data(
         if "supplier_card" not in df.columns:
             df["supplier_card"] = None
         df["supplier_card"] = df["supplier_card"].apply(core_io.normalize_supplier_card_value)
-
-        brand_series = df["brand"].apply(
-            lambda v: None if v is None or str(v).strip() == "" or str(v).strip().lower() in {"nan", "none"} else str(v).strip()
-        )
-        df["brand"] = brand_series.fillna(df["product"].apply(lambda v: core_io.extract_brand_from_product(v, brand_keywords)))
+        df = core_io.ensure_sales_brand_column(df, brand_keywords)
 
         parsed_dates = core_io.parse_sales_dates(df["sales_date"], date_format=sales_date_format, dayfirst=sales_date_dayfirst)
         invalid_sales_date_rows += int(parsed_dates.isna().sum())
@@ -262,9 +240,7 @@ def generate_report_for_system(
         raise stage_error("normalize", exc) from exc
 
     if inv_brand is None:
-        inv_df = inv_df.copy()
-        inv_df["品牌"] = inv_df[inv_product].apply(lambda v: core_io.extract_brand_from_product(v, brand_keywords))
-        inv_brand = "品牌"
+        raise stage_error("normalize", ValueError("Inventory brand column normalization failed unexpectedly."))
 
     inventory_columns = [inv_store, inv_brand, inv_product, inv_barcode, inv_qty]
     if inv_supplier_card is not None:

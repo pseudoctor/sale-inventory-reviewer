@@ -21,6 +21,7 @@ from scripts.generate_inventory_risk_report import (
     resolve_sales_candidates,
     validate_config,
 )
+from scripts.core import io as core_io
 from scripts.core import pipeline as core_pipeline
 
 
@@ -61,6 +62,10 @@ class CoreCalculationsTest(unittest.TestCase):
                     "brand_keywords": [],
                 }
             )
+
+    def test_effective_brand_keywords_rejects_empty(self):
+        with self.assertRaises(ValueError):
+            core_pipeline._effective_brand_keywords({"brand_keywords": []})
 
     def test_overlap_days_with_overlap(self):
         start = pd.Timestamp("2025-11-01")
@@ -278,6 +283,36 @@ class CoreCalculationsTest(unittest.TestCase):
             with patch("scripts.core.io.importlib.util.find_spec", return_value=None):
                 with self.assertRaises(ModuleNotFoundError):
                     read_excel_first_sheet(path)
+
+    def test_extract_brand_from_product_prefers_earliest_position(self):
+        product = "特选奶源伊利蒙牛联名款"
+        brands = ["蒙牛", "伊利"]
+        out = core_io.extract_brand_from_product(product, brands)
+        self.assertEqual(out, "伊利")
+
+    def test_ensure_inventory_brand_column_fills_missing_and_blank(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店", "A店", "A店"],
+                "商品名称": ["伊利高钙奶", "蒙牛纯牛奶", "无品牌商品"],
+                "品牌": [None, "", "  "],
+                "库存数量": [1, 2, 3],
+            }
+        )
+        out = core_io.ensure_inventory_brand_column(df, ["伊利", "蒙牛"])
+        self.assertEqual(out["品牌"].tolist(), ["伊利", "蒙牛", "其他"])
+
+    def test_ensure_sales_brand_column_adds_brand_when_column_missing(self):
+        df = pd.DataFrame(
+            {
+                "store": ["A店", "A店"],
+                "product": ["伊利高钙奶", "未知商品"],
+                "barcode": ["1", "2"],
+                "sales_qty": [1, 2],
+            }
+        )
+        out = core_io.ensure_sales_brand_column(df, ["伊利", "蒙牛"])
+        self.assertEqual(out["brand"].tolist(), ["伊利", "其他"])
 
 
 if __name__ == "__main__":

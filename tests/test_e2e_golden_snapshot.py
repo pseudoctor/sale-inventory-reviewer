@@ -448,3 +448,77 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     row = detail.iloc[0]
     assert str(row["商品条码"]) == "817620"
     assert row["省份"] == "其他/未知"
+
+
+def test_brand_is_derived_when_column_missing_or_blank(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A", "门店A"],
+                "商品名称": ["伊利高钙奶", "未知商品"],
+                "商品条码": ["6901111111111", "6902222222222"],
+                "销售数量": [10, 5],
+                "销售时间": ["2026-02-08", "2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A", "门店A"],
+                "商品名称": ["伊利高钙奶", "未知商品"],
+                "品牌": ["", None],
+                "商品条码": ["6901111111111", "6902222222222"],
+                "库存数量": [20, 10],
+                "库存日期": ["2026-02-09", "2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6901111111111", "6902222222222"],
+                "商品名称": ["伊利高钙奶", "未知商品"],
+                "装箱数（因子）": [6, 6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "brand_keywords": ["伊利", "蒙牛"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+    generate_report_for_system(config, config)
+
+    detail = pd.read_excel(output_file, sheet_name="明细", header=1)
+    detail["门店名称"] = detail["门店名称"].ffill()
+    brand_by_product = dict(zip(detail["商品名称"], detail["品牌"]))
+    assert brand_by_product["伊利高钙奶"] == "伊利"
+    assert brand_by_product["未知商品"] == "其他"

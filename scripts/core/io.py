@@ -229,23 +229,77 @@ def extract_brand_from_product(product: Optional[str], brands: List[str]) -> str
     if product is None:
         return "其他"
     text = str(product)
+    best_brand: Optional[str] = None
+    best_pos: Optional[int] = None
     for brand in brands:
-        if brand in text:
-            return brand
+        keyword = str(brand).strip()
+        if keyword == "":
+            continue
+        pos = text.find(keyword)
+        if pos == -1:
+            continue
+        if best_pos is None or pos < best_pos:
+            best_pos = pos
+            best_brand = keyword
+    if best_brand is not None:
+        return best_brand
     return "其他"
+
+
+def _normalize_brand_value(value) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text == "" or text.lower() in {"nan", "none"}:
+        return None
+    return text
+
+
+def fill_brand_from_product(
+    df: pd.DataFrame,
+    *,
+    product_col: str,
+    brands: List[str],
+    brand_col: str = "品牌",
+    insert_before_col: Optional[str] = None,
+) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = df.columns.str.strip()
+    if product_col not in df.columns:
+        raise ValueError(f"Missing {product_col}; cannot derive {brand_col} column.")
+    if brand_col not in df.columns:
+        insert_anchor = insert_before_col or product_col
+        insert_at = list(df.columns).index(insert_anchor)
+        df.insert(insert_at, brand_col, None)
+
+    existing_brand = df[brand_col].apply(_normalize_brand_value)
+    fallback_brand = df[product_col].apply(lambda v: extract_brand_from_product(v, brands))
+    df[brand_col] = existing_brand.fillna(fallback_brand)
+    return df
 
 
 def ensure_inventory_brand_column(df: pd.DataFrame, brands: List[str]) -> pd.DataFrame:
     df = df.copy()
     df.columns = df.columns.str.strip()
-    if "品牌" in df.columns:
-        return df
-    if "商品名称" not in df.columns:
-        raise ValueError("Inventory file missing 商品名称; cannot derive 品牌 column.")
-    brand_series = df["商品名称"].apply(lambda v: extract_brand_from_product(v, brands))
-    insert_at = list(df.columns).index("商品名称")
-    df.insert(insert_at, "品牌", brand_series)
-    return df
+    return fill_brand_from_product(
+        df,
+        product_col="商品名称",
+        brands=brands,
+        brand_col="品牌",
+        insert_before_col="商品名称",
+    )
+
+
+def ensure_sales_brand_column(df: pd.DataFrame, brands: List[str]) -> pd.DataFrame:
+    df = df.copy()
+    df.columns = df.columns.str.strip()
+    return fill_brand_from_product(
+        df,
+        product_col="product",
+        brands=brands,
+        brand_col="brand",
+        insert_before_col="product",
+    )
 
 
 def extract_inventory_date(df: pd.DataFrame) -> str:

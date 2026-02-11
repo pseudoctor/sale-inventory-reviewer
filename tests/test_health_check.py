@@ -52,6 +52,7 @@ class HealthCheckTest(unittest.TestCase):
             ):
                 errors = health_check._check_config_and_paths()
             self.assertTrue(any("no auto-detected sales files" in err for err in errors))
+            self.assertTrue(any("brand_keywords is empty" in err for err in errors))
 
 
 if __name__ == "__main__":
