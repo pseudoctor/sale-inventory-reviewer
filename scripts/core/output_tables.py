@@ -85,6 +85,10 @@ def build_report_frames(
             "turnover_days": "库存周转天数",
             "suggest_outbound_qty": "建议调出数量",
             "suggest_replenish_qty": "建议补货数量",
+            "name_source_rule": "名称来源规则",
+            "brand_source_rule": "品牌来源规则",
+            "name_conflict_count": "同键名称数",
+            "brand_conflict_count": "同键品牌数",
         }
     )
     detail_out["商品条码"] = detail_out["商品条码"].apply(lambda x: core_io.normalize_barcode_value(x) or "")
@@ -103,6 +107,10 @@ def build_report_frames(
             "库存周转天数",
             "建议调出数量",
             "建议补货数量",
+            "名称来源规则",
+            "品牌来源规则",
+            "同键名称数",
+            "同键品牌数",
         ]
     )
     detail_out = detail_out[detail_output_columns]
@@ -132,6 +140,9 @@ def build_report_frames(
             "风险等级",
         ]
     ]
+    store_summary_out["预测平均日销(季节模式后)"] = pd.to_numeric(
+        store_summary_out["预测平均日销(季节模式后)"], errors="coerce"
+    ).round(3)
 
     brand_summary_out = brand_summary.rename(
         columns={
@@ -158,6 +169,9 @@ def build_report_frames(
             "风险等级",
         ]
     ]
+    brand_summary_out["预测平均日销(季节模式后)"] = pd.to_numeric(
+        brand_summary_out["预测平均日销(季节模式后)"], errors="coerce"
+    ).round(3)
 
     missing_sku_out = missing_sales[
         ["store", "brand", "display_barcode", "barcode", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d"]

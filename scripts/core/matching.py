@@ -8,6 +8,48 @@ from . import io as core_io
 from . import metrics as core_metrics
 
 
+def _build_sales_key_mapping(sales_df: pd.DataFrame) -> pd.DataFrame:
+    key_cols = ["store", "barcode_key"]
+    sorted_sales = sales_df.copy()
+    # Deterministic tie-break for same-day records:
+    # 1) latest sales_date
+    # 2) larger sales_qty
+    # 3) lexical product/brand to keep output stable across runs
+    sorted_sales["product_sort"] = sorted_sales["product"].fillna("").astype(str)
+    sorted_sales["brand_sort"] = sorted_sales["brand"].fillna("").astype(str)
+    sorted_sales = sorted_sales.sort_values(
+        ["sales_date", "sales_qty", "product_sort", "brand_sort"],
+        ascending=[True, True, True, True],
+    )
+    latest_rows = (
+        sorted_sales
+        .groupby(key_cols, as_index=False)
+        .tail(1)[key_cols + ["product", "brand", "display_barcode", "sales_date"]]
+        .rename(
+            columns={
+                "product": "display_product_name",
+                "brand": "display_brand",
+                "sales_date": "name_source_ts",
+            }
+        )
+    )
+    latest_rows["brand_source_ts"] = latest_rows["name_source_ts"]
+
+    conflicts = (
+        sorted_sales.groupby(key_cols, as_index=False)
+        .agg(
+            record_rows=("product", "size"),
+            name_conflict_count=("product", "nunique"),
+            brand_conflict_count=("brand", "nunique"),
+        )
+    )
+
+    out = latest_rows.merge(conflicts, on=key_cols, how="left")
+    for col in ["record_rows", "name_conflict_count", "brand_conflict_count"]:
+        out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0).astype(int)
+    return out
+
+
 def build_detail_with_matching(
     *,
     sales_df: pd.DataFrame,
@@ -25,29 +67,29 @@ def build_detail_with_matching(
     high_days: float,
     is_wumei_system: bool,
     province_mapper: Callable[[str | None], str],
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float]]:
     sales_df = sales_df.copy()
     sales_df["barcode_key"] = sales_df["barcode"].apply(core_io.normalize_barcode_value)
     sales_3m_mtd = sales_df[(sales_df["sales_date"] >= mtd_start) & (sales_df["sales_date"] <= mtd_end)]
     sales_30d = sales_df[(sales_df["sales_date"] >= recent_start) & (sales_df["sales_date"] <= inventory_date_ts)]
 
     sales_totals = (
-        sales_df.groupby(["store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
+        sales_df.groupby(["store", "barcode_key"], as_index=False)["sales_qty"]
         .sum()
         .rename(columns={"sales_qty": "sales_qty_total"})
     )
     sales_totals = sales_totals.merge(
-        sales_3m_mtd.groupby(["store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
+        sales_3m_mtd.groupby(["store", "barcode_key"], as_index=False)["sales_qty"]
         .sum()
         .rename(columns={"sales_qty": "sales_qty_3m_mtd"}),
-        on=["store", "brand", "product", "barcode"],
+        on=["store", "barcode_key"],
         how="left",
     )
     sales_totals = sales_totals.merge(
-        sales_30d.groupby(["store", "brand", "product", "barcode"], as_index=False)["sales_qty"]
+        sales_30d.groupby(["store", "barcode_key"], as_index=False)["sales_qty"]
         .sum()
         .rename(columns={"sales_qty": "sales_qty_30d"}),
-        on=["store", "brand", "product", "barcode"],
+        on=["store", "barcode_key"],
         how="left",
     )
     sales_totals["sales_qty_3m_mtd"] = sales_totals["sales_qty_3m_mtd"].fillna(0)
@@ -60,111 +102,106 @@ def build_detail_with_matching(
         use_peak_mode,
     )
 
+    sales_mapping = _build_sales_key_mapping(sales_df)
     sales_supplier = (
-        sales_df.groupby(["store", "brand", "product", "barcode"])["supplier_card"]
+        sales_df.groupby(["store", "barcode_key"])["supplier_card"]
         .agg(core_io.pick_first_non_empty)
         .reset_index(name="supplier_card")
     )
-    sales_display_barcode = core_io.build_unambiguous_barcode_map(
-        sales_df,
-        ["store", "brand", "product", "barcode"],
-        "display_barcode",
-        "display_barcode",
+    sales_totals = sales_totals.merge(
+        sales_mapping[
+            [
+                "store",
+                "barcode_key",
+                "display_product_name",
+                "display_brand",
+                "display_barcode",
+                "name_source_ts",
+                "brand_source_ts",
+                "name_conflict_count",
+                "brand_conflict_count",
+                "record_rows",
+            ]
+        ],
+        on=["store", "barcode_key"],
+        how="left",
     )
-    sales_totals = sales_totals.merge(sales_supplier, on=["store", "brand", "product", "barcode"], how="left")
-    sales_totals = sales_totals.merge(sales_display_barcode, on=["store", "brand", "product", "barcode"], how="left")
-    sales_totals["barcode_key"] = sales_totals["barcode"].apply(core_io.normalize_barcode_value)
+    sales_totals = sales_totals.merge(sales_supplier, on=["store", "barcode_key"], how="left")
 
-    inv_totals = inv_df.groupby(["store", "brand", "product", "barcode"], as_index=False)["inventory_qty"].sum()
-    inv_totals["barcode_key"] = inv_totals["barcode"].apply(core_io.normalize_barcode_value)
+    inv_df = inv_df.copy()
+    inv_df["barcode_key"] = inv_df["barcode"].apply(core_io.normalize_barcode_value)
+    inv_totals = (
+        inv_df.groupby(["store", "barcode_key"], as_index=False)
+        .agg(
+            inventory_qty=("inventory_qty", "sum"),
+            inventory_brand=("brand", core_io.pick_first_non_empty),
+            inventory_product=("product", core_io.pick_first_non_empty),
+            inventory_barcode=("barcode", core_io.pick_first_non_empty),
+            inventory_supplier_card=("supplier_card", core_io.pick_first_non_empty),
+        )
+    )
 
     detail = inv_totals.copy()
     detail = detail.merge(
-        sales_totals[["store", "barcode_key", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales", "display_barcode"]],
+        sales_totals[
+            [
+                "store",
+                "barcode_key",
+                "daily_sales_3m_mtd",
+                "daily_sales_30d",
+                "forecast_daily_sales",
+                "display_product_name",
+                "display_brand",
+                "display_barcode",
+                "supplier_card",
+                "name_source_ts",
+                "brand_source_ts",
+                "name_conflict_count",
+                "brand_conflict_count",
+            ]
+        ],
         on=["store", "barcode_key"],
         how="left",
     )
 
-    fallback_sales = sales_totals.groupby(["store", "brand", "product"], as_index=False)[
-        ["daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales"]
-    ].sum()
-    missing_mask = detail["forecast_daily_sales"].isna()
-    if missing_mask.any():
-        fallback = detail.loc[missing_mask].merge(
-            fallback_sales,
-            on=["store", "brand", "product"],
-            how="left",
-            suffixes=("", "_fallback"),
-        )
-        detail.loc[missing_mask, "daily_sales_3m_mtd"] = fallback["daily_sales_3m_mtd_fallback"].values
-        detail.loc[missing_mask, "daily_sales_30d"] = fallback["daily_sales_30d_fallback"].values
-        detail.loc[missing_mask, "forecast_daily_sales"] = fallback["forecast_daily_sales_fallback"].values
-
-    sales_display_barcode_global = core_io.build_unambiguous_barcode_map(
-        sales_df, ["barcode"], "display_barcode", "display_barcode_global"
-    )
-    detail = detail.merge(sales_display_barcode_global.rename(columns={"barcode": "barcode_key"}), on="barcode_key", how="left")
-    detail["display_barcode"] = detail["display_barcode"].where(detail["display_barcode"].notna(), detail["display_barcode_global"])
-    detail = detail.drop(columns=["display_barcode_global"])
-
-    sales_display_product_global = core_io.build_unambiguous_barcode_map(
-        sales_df,
-        ["brand", "product"],
-        "display_barcode",
-        "display_barcode_brand_product_global",
-    )
-    detail = detail.merge(sales_display_product_global, on=["brand", "product"], how="left")
-    detail["display_barcode"] = detail["display_barcode"].where(
-        detail["display_barcode"].notna(), detail["display_barcode_brand_product_global"]
-    )
-    detail = detail.drop(columns=["display_barcode_brand_product_global"])
-
     detail["daily_sales_3m_mtd"] = detail["daily_sales_3m_mtd"].fillna(0)
     detail["daily_sales_30d"] = detail["daily_sales_30d"].fillna(0)
     detail["forecast_daily_sales"] = detail["forecast_daily_sales"].fillna(0)
+    detail["product"] = detail["display_product_name"].where(detail["display_product_name"].notna(), detail["inventory_product"])
+    detail["brand"] = detail["display_brand"].where(detail["display_brand"].notna(), detail["inventory_brand"])
+    detail["product"] = detail["product"].fillna("")
+    detail["brand"] = detail["brand"].fillna("")
+    detail.loc[detail["brand"].astype(str).str.strip() == "", "brand"] = "其他/未知"
 
-    inv_supplier = (
-        inv_df.groupby(["store", "brand", "product", "barcode"])["supplier_card"]
-        .agg(core_io.pick_first_non_empty)
-        .reset_index(name="supplier_card")
+    detail["name_source_rule"] = detail["display_product_name"].notna().map(
+        {True: "latest_sales_name", False: "inventory_fallback"}
     )
-    inv_supplier["barcode_key"] = inv_supplier["barcode"].apply(core_io.normalize_barcode_value)
-    detail = detail.merge(inv_supplier[["store", "barcode_key", "supplier_card"]], on=["store", "barcode_key"], how="left")
-
-    inv_supplier_fallback = (
-        inv_supplier.groupby(["store", "brand", "product"])["supplier_card"]
-        .agg(core_io.pick_first_non_empty)
-        .reset_index(name="supplier_card")
+    detail["brand_source_rule"] = detail["display_brand"].notna().map(
+        {True: "latest_sales_brand", False: "inventory_fallback"}
     )
-    mask = detail["supplier_card"].isna()
-    if mask.any():
-        fallback = detail.loc[mask].merge(inv_supplier_fallback, on=["store", "brand", "product"], how="left", suffixes=("", "_fallback"))
-        detail.loc[mask, "supplier_card"] = fallback["supplier_card_fallback"].values
+    detail["name_conflict_count"] = pd.to_numeric(detail["name_conflict_count"], errors="coerce").fillna(0).astype(int)
+    detail["brand_conflict_count"] = pd.to_numeric(detail["brand_conflict_count"], errors="coerce").fillna(0).astype(int)
 
-    sales_supplier_exact = sales_totals[["store", "barcode_key", "supplier_card"]].copy()
-    mask = detail["supplier_card"].isna()
-    if mask.any():
-        fallback = detail.loc[mask].merge(sales_supplier_exact, on=["store", "barcode_key"], how="left", suffixes=("", "_fallback"))
-        detail.loc[mask, "supplier_card"] = fallback["supplier_card_fallback"].values
+    mapping_coverage_rate = float(detail["display_product_name"].notna().mean()) if len(detail) > 0 else 1.0
 
-    sales_supplier_fallback = (
-        sales_totals.groupby(["store", "brand", "product"])["supplier_card"]
-        .agg(core_io.pick_first_non_empty)
-        .reset_index(name="supplier_card")
+    detail["supplier_card"] = detail["inventory_supplier_card"].where(
+        detail["inventory_supplier_card"].notna(),
+        detail["supplier_card"],
     )
-    mask = detail["supplier_card"].isna()
-    if mask.any():
-        fallback = detail.loc[mask].merge(sales_supplier_fallback, on=["store", "brand", "product"], how="left", suffixes=("", "_fallback"))
-        detail.loc[mask, "supplier_card"] = fallback["supplier_card_fallback"].values
-
     detail["province"] = detail["supplier_card"].apply(province_mapper)
-    detail["barcode_output"] = detail["display_barcode"].where(detail["display_barcode"].notna(), detail["barcode"]) if is_wumei_system else detail["barcode"]
+    detail["barcode"] = detail["inventory_barcode"].where(detail["inventory_barcode"].notna(), detail["barcode_key"])
+    detail["barcode_output"] = (
+        detail["display_barcode"].where(detail["display_barcode"].notna(), detail["barcode"])
+        if is_wumei_system
+        else detail["barcode"]
+    )
 
     detail = core_metrics.apply_inventory_metrics(detail, low_days, high_days)
     detail = detail[[
         "store", "brand", "barcode", "barcode_output", "product", "daily_sales_3m_mtd", "daily_sales_30d",
         "forecast_daily_sales", "inventory_qty", "supplier_card", "province", "risk_level", "inventory_sales_ratio",
-        "turnover_rate", "turnover_days",
+        "turnover_rate", "turnover_days", "name_source_rule", "brand_source_rule",
+        "name_conflict_count", "brand_conflict_count",
     ]].sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
 
     store_summary = detail.groupby("store", as_index=False).agg({
@@ -177,33 +214,23 @@ def build_detail_with_matching(
     })
     brand_summary = core_metrics.apply_inventory_metrics(brand_summary, low_days, high_days)
 
-    inv_barcode_keys_df = (
-        inv_totals[["store", "barcode_key"]]
-        .dropna(subset=["barcode_key"])
-        .drop_duplicates()
-        .assign(_has_inv_barcode=True)
-    )
-    inv_fallback_keys_df = (
-        inv_totals[["store", "brand", "product"]]
-        .drop_duplicates()
-        .assign(_has_inv_fallback=True)
-    )
-
     missing_sales = sales_totals.merge(
-        inv_barcode_keys_df,
+        inv_totals[["store", "barcode_key"]].dropna(subset=["barcode_key"]).drop_duplicates().assign(_has_inv_barcode=True),
         on=["store", "barcode_key"],
-        how="left",
-    ).merge(
-        inv_fallback_keys_df,
-        on=["store", "brand", "product"],
         how="left",
     )
     missing_sales = missing_sales[
-        missing_sales["_has_inv_barcode"].isna()
-        & missing_sales["_has_inv_fallback"].isna()
-        & (missing_sales["forecast_daily_sales"] > 0)
+        missing_sales["_has_inv_barcode"].isna() & (missing_sales["forecast_daily_sales"] > 0)
     ].copy()
-    missing_sales = missing_sales.drop(columns=["_has_inv_barcode", "_has_inv_fallback"])
+    missing_sales = missing_sales.drop(columns=["_has_inv_barcode"])
+    missing_sales["product"] = missing_sales["display_product_name"].fillna("")
+    missing_sales["brand"] = missing_sales["display_brand"].fillna("")
+    missing_sales.loc[missing_sales["brand"].astype(str).str.strip() == "", "brand"] = "其他/未知"
+    missing_sales["barcode"] = missing_sales["barcode_key"]
+    missing_sales["name_source_rule"] = "latest_sales_name"
+    missing_sales["brand_source_rule"] = "latest_sales_brand"
+    missing_sales["name_conflict_count"] = pd.to_numeric(missing_sales["name_conflict_count"], errors="coerce").fillna(0).astype(int)
+    missing_sales["brand_conflict_count"] = pd.to_numeric(missing_sales["brand_conflict_count"], errors="coerce").fillna(0).astype(int)
     missing_sales["province"] = missing_sales["supplier_card"].apply(province_mapper)
 
     if not missing_sales.empty:
@@ -222,9 +249,16 @@ def build_detail_with_matching(
         missing_detail = missing_detail[[
             "store", "brand", "barcode", "barcode_output", "product", "daily_sales_3m_mtd", "daily_sales_30d",
             "forecast_daily_sales", "inventory_qty", "supplier_card", "province", "risk_level", "inventory_sales_ratio",
-            "turnover_rate", "turnover_days",
+            "turnover_rate", "turnover_days", "name_source_rule", "brand_source_rule",
+            "name_conflict_count", "brand_conflict_count",
         ]]
         detail = pd.concat([detail, missing_detail], ignore_index=True)
 
     detail = detail.sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
-    return detail, missing_sales, store_summary, brand_summary
+    mapping_stats = {
+        "duplicate_store_barcode_keys": int((sales_mapping["record_rows"] > 1).sum()),
+        "name_conflict_keys": int((sales_mapping["name_conflict_count"] > 1).sum()),
+        "brand_conflict_keys": int((sales_mapping["brand_conflict_count"] > 1).sum()),
+        "mapping_coverage_rate": mapping_coverage_rate,
+    }
+    return detail, missing_sales, store_summary, brand_summary, mapping_stats

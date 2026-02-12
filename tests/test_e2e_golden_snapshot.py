@@ -299,7 +299,7 @@ def test_golden_snapshot_peak_mode_case_rounding(tmp_path: Path):
     _capture_report(output_file, "golden_report_snapshot_peak.json")
 
 
-def test_multi_store_fallback_matching_keeps_store_isolation(tmp_path: Path):
+def test_multi_store_barcode_key_matching_does_not_fallback_by_product_name(tmp_path: Path):
     raw_root = tmp_path / "raw_data"
     system_dir = raw_root / "陕西华润"
     data_dir = tmp_path / "data"
@@ -371,8 +371,8 @@ def test_multi_store_fallback_matching_keeps_store_isolation(tmp_path: Path):
     detail["门店名称"] = detail["门店名称"].ffill()
     a_daily = float(detail.loc[detail["门店名称"] == "门店A", "近三月+本月迄今平均日销"].iloc[0])
     b_daily = float(detail.loc[detail["门店名称"] == "门店B", "近三月+本月迄今平均日销"].iloc[0])
-    assert a_daily > b_daily
-    assert round(a_daily / b_daily, 1) == 5.0
+    assert a_daily == 0.0
+    assert b_daily == 0.0
 
 
 def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
@@ -448,6 +448,94 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     row = detail.iloc[0]
     assert str(row["商品条码"]) == "817620"
     assert row["省份"] == "其他/未知"
+
+
+def test_sales_supplier_fallback_handles_duplicate_store_barcode(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A", "门店A"],
+                "品牌": ["品牌Q", "品牌Q"],
+                "商品名称": ["商品名1", "商品名2"],
+                "商品条码": ["6904007562070", "6904007562070"],
+                "销售数量": [5, 6],
+                "销售时间": ["2026-02-08", "2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌Q"],
+                "商品名称": ["库存商品X"],
+                "商品条码": ["6904007562070"],
+                "库存数量": [10],
+                "库存日期": ["2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6904007562070"],
+                "商品名称": ["库存商品X"],
+                "装箱数（因子）": [6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "brand_keywords": ["品牌Q"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    generate_report_for_system(config, config)
+    assert output_file.exists()
+    detail = pd.read_excel(output_file, sheet_name="明细", header=1)
+    detail["门店名称"] = detail["门店名称"].ffill()
+    rows = detail.loc[detail["门店名称"] == "门店A"]
+    assert len(rows) == 1
+    row = rows.iloc[0]
+    assert float(row["近三月+本月迄今平均日销"]) > 0
+    assert row["商品名称"] == "商品名2"
+    assert row["名称来源规则"] == "latest_sales_name"
+    assert row["品牌来源规则"] == "latest_sales_brand"
+    assert int(row["同键名称数"]) == 2
+    assert int(row["同键品牌数"]) == 1
+
+    status = pd.read_excel(output_file, sheet_name="运行状态", header=1)
+    status_map = dict(zip(status["状态项"], status["值"]))
+    assert int(status_map["同店同条码重复键数"]) == 1
+    assert int(status_map["名称冲突键数"]) == 1
+    assert int(status_map["品牌冲突键数"]) == 0
 
 
 def test_brand_is_derived_when_column_missing_or_blank(tmp_path: Path):

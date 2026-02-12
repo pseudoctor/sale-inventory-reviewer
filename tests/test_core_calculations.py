@@ -22,6 +22,8 @@ from scripts.generate_inventory_risk_report import (
     validate_config,
 )
 from scripts.core import io as core_io
+from scripts.core import matching as core_matching
+from scripts.core import output_tables as core_output_tables
 from scripts.core import pipeline as core_pipeline
 
 
@@ -313,6 +315,187 @@ class CoreCalculationsTest(unittest.TestCase):
         )
         out = core_io.ensure_sales_brand_column(df, ["伊利", "蒙牛"])
         self.assertEqual(out["brand"].tolist(), ["伊利", "其他"])
+
+    def test_store_and_brand_summary_forecast_daily_sales_rounded_to_3_decimals(self):
+        detail = pd.DataFrame(
+            columns=[
+                "store",
+                "brand",
+                "barcode_output",
+                "product",
+                "province",
+                "daily_sales_3m_mtd",
+                "daily_sales_30d",
+                "inventory_qty",
+                "out_of_stock",
+                "risk_level",
+                "inventory_sales_ratio",
+                "turnover_rate",
+                "turnover_days",
+                "suggest_outbound_qty",
+                "suggest_replenish_qty",
+                "name_source_rule",
+                "brand_source_rule",
+                "name_conflict_count",
+                "brand_conflict_count",
+            ]
+        )
+        missing_sales = pd.DataFrame(
+            columns=[
+                "store",
+                "brand",
+                "display_barcode",
+                "barcode",
+                "product",
+                "province",
+                "daily_sales_3m_mtd",
+                "daily_sales_30d",
+            ]
+        )
+        store_summary = pd.DataFrame(
+            {
+                "store": ["A店"],
+                "daily_sales_3m_mtd": [1.0],
+                "daily_sales_30d": [1.0],
+                "forecast_daily_sales": [1.23456],
+                "inventory_qty": [10],
+                "risk_level": ["中"],
+                "inventory_sales_ratio": [10.0],
+                "turnover_rate": [0.1],
+                "turnover_days": [10.0],
+            }
+        )
+        brand_summary = pd.DataFrame(
+            {
+                "brand": ["品牌A"],
+                "daily_sales_3m_mtd": [1.0],
+                "daily_sales_30d": [1.0],
+                "forecast_daily_sales": [2.34567],
+                "inventory_qty": [10],
+                "risk_level": ["中"],
+                "inventory_sales_ratio": [10.0],
+                "turnover_rate": [0.1],
+                "turnover_days": [10.0],
+            }
+        )
+        carton_factor_df = pd.DataFrame(columns=["商品条码", "商品名称", "装箱数（因子）"])
+
+        frames = core_output_tables.build_report_frames(
+            detail=detail,
+            missing_sales=missing_sales,
+            store_summary=store_summary,
+            brand_summary=brand_summary,
+            carton_factor_df=carton_factor_df,
+            is_wumei_system=False,
+            enable_province_column=False,
+            use_peak_mode=False,
+        )
+
+        self.assertEqual(float(frames["门店汇总"]["预测平均日销(季节模式后)"].iloc[0]), 1.235)
+        self.assertEqual(float(frames["品牌汇总"]["预测平均日销(季节模式后)"].iloc[0]), 2.346)
+
+    def test_matching_uses_store_barcode_key_and_latest_name_brand(self):
+        sales_df = pd.DataFrame(
+            {
+                "store": ["门店A", "门店A", "门店A"],
+                "brand": ["品牌旧", "品牌新", "品牌X"],
+                "product": ["旧名称", "新名称", "独立SKU"],
+                "barcode": ["6901", "6901", "6902"],
+                "display_barcode": ["6901", "6901", "6902"],
+                "sales_qty": [3, 7, 5],
+                "sales_date": pd.to_datetime(["2026-02-01", "2026-02-08", "2026-02-08"]),
+                "supplier_card": [None, "153085", "153085"],
+            }
+        )
+        inv_df = pd.DataFrame(
+            {
+                "store": ["门店A", "门店A"],
+                "brand": ["库存品牌", "库存品牌X"],
+                "product": ["库存名称", "独立SKU"],
+                "barcode": ["6901", "6902"],
+                "inventory_qty": [20, 10],
+                "supplier_card": [None, None],
+            }
+        )
+
+        detail, missing_sales, store_summary, brand_summary, mapping_stats = core_matching.build_detail_with_matching(
+            sales_df=sales_df,
+            inv_df=inv_df,
+            mtd_start=pd.Timestamp("2026-02-01"),
+            mtd_end=pd.Timestamp("2026-02-09"),
+            recent_start=pd.Timestamp("2026-01-11"),
+            inventory_date_ts=pd.Timestamp("2026-02-09"),
+            mtd_days=9,
+            recent_days_effective=30,
+            has_mtd_window_data=True,
+            has_recent_window_data=True,
+            use_peak_mode=False,
+            low_days=45,
+            high_days=60,
+            is_wumei_system=False,
+            province_mapper=lambda _: "其他/未知",
+        )
+
+        self.assertEqual(len(detail), 2)
+        key_row = detail.loc[detail["barcode"] == "6901"].iloc[0]
+        self.assertEqual(key_row["product"], "新名称")
+        self.assertEqual(key_row["brand"], "品牌新")
+        self.assertEqual(key_row["name_source_rule"], "latest_sales_name")
+        self.assertEqual(key_row["brand_source_rule"], "latest_sales_brand")
+        self.assertEqual(int(key_row["name_conflict_count"]), 2)
+        self.assertEqual(int(key_row["brand_conflict_count"]), 2)
+        self.assertEqual(mapping_stats["duplicate_store_barcode_keys"], 1)
+        self.assertEqual(mapping_stats["name_conflict_keys"], 1)
+        self.assertEqual(mapping_stats["brand_conflict_keys"], 1)
+        self.assertEqual(len(missing_sales), 0)
+        self.assertEqual(len(store_summary), 1)
+        self.assertGreaterEqual(len(brand_summary), 1)
+
+    def test_matching_tie_break_is_stable_for_same_day_records(self):
+        sales_df = pd.DataFrame(
+            {
+                "store": ["门店A", "门店A"],
+                "brand": ["品牌B", "品牌A"],
+                "product": ["名称B", "名称A"],
+                "barcode": ["6901", "6901"],
+                "display_barcode": ["6901", "6901"],
+                "sales_qty": [5, 5],
+                "sales_date": pd.to_datetime(["2026-02-08", "2026-02-08"]),
+                "supplier_card": ["153085", "153085"],
+            }
+        )
+        inv_df = pd.DataFrame(
+            {
+                "store": ["门店A"],
+                "brand": ["库存品牌"],
+                "product": ["库存名称"],
+                "barcode": ["6901"],
+                "inventory_qty": [10],
+                "supplier_card": [None],
+            }
+        )
+
+        detail, *_ = core_matching.build_detail_with_matching(
+            sales_df=sales_df,
+            inv_df=inv_df,
+            mtd_start=pd.Timestamp("2026-02-01"),
+            mtd_end=pd.Timestamp("2026-02-09"),
+            recent_start=pd.Timestamp("2026-01-11"),
+            inventory_date_ts=pd.Timestamp("2026-02-09"),
+            mtd_days=9,
+            recent_days_effective=30,
+            has_mtd_window_data=True,
+            has_recent_window_data=True,
+            use_peak_mode=False,
+            low_days=45,
+            high_days=60,
+            is_wumei_system=False,
+            province_mapper=lambda _: "其他/未知",
+        )
+
+        row = detail.iloc[0]
+        self.assertEqual(row["product"], "名称B")
+        self.assertEqual(row["brand"], "品牌B")
 
 
 if __name__ == "__main__":

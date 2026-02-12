@@ -302,7 +302,7 @@ def generate_report_for_system(
 
     high_days = float(config.get("risk_days_high", 60))
     low_days = float(config.get("risk_days_low", 45))
-    detail, missing_sales, store_summary, brand_summary = core_matching.build_detail_with_matching(
+    detail, missing_sales, store_summary, brand_summary, mapping_stats = core_matching.build_detail_with_matching(
         sales_df=sales_df,
         inv_df=inv_df,
         mtd_start=mtd_start,
@@ -389,6 +389,10 @@ def generate_report_for_system(
         ["销售无效日期行数", invalid_sales_date_rows],
         ["建议补货清单缺失装箱因子行数", int((replenish_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in replenish_out.columns else 0],
         ["建议调货清单缺失装箱因子行数", int((transfer_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in transfer_out.columns else 0],
+        ["同店同条码重复键数", int(mapping_stats.get("duplicate_store_barcode_keys", 0))],
+        ["名称冲突键数", int(mapping_stats.get("name_conflict_keys", 0))],
+        ["品牌冲突键数", int(mapping_stats.get("brand_conflict_keys", 0))],
+        ["映射覆盖率", f"{float(mapping_stats.get('mapping_coverage_rate', 0.0)) * 100:.1f}%"],
         ["窗口数据状态", "正常" if (has_mtd_window_data and has_recent_window_data) else f"警告: 3M+MTD有效={has_mtd_window_data}, 30天有效={has_recent_window_data}"],
         ["自动扫描忽略销售文件数", len(ignored_sales_files)],
     ]
