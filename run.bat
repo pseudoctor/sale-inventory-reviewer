@@ -26,7 +26,7 @@ if not exist "venv\" (
   python -m pip install --upgrade pip
   set "REQ_FILE=requirements.txt"
   if exist "requirements.lock" set "REQ_FILE=requirements.lock"
-  pip install -r !REQ_FILE!
+  python -m pip install -r !REQ_FILE!
 ) else (
   call venv\Scripts\activate.bat
 )
@@ -36,7 +36,7 @@ if errorlevel 1 (
   set "REQ_FILE=requirements.txt"
   if exist "requirements.lock" set "REQ_FILE=requirements.lock"
   echo Installing missing dependencies from !REQ_FILE! ...
-  pip install -r !REQ_FILE!
+  python -m pip install -r !REQ_FILE!
 )
 
 python scripts\health_check.py

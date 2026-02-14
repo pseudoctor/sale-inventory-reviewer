@@ -1,4 +1,5 @@
 import unittest
+from io import StringIO
 from pathlib import Path
 import tempfile
 from unittest.mock import patch
@@ -20,6 +21,30 @@ class HealthCheckTest(unittest.TestCase):
         with patch("scripts.health_check.importlib.import_module", side_effect=fake_import):
             errors = health_check._check_dependencies()
         self.assertTrue(any("xlrd" in err for err in errors))
+
+    def test_check_dependencies_reports_broken_yaml_module(self):
+        class BrokenYamlModule:
+            __file__ = None
+
+        def fake_import(name):
+            if name == "yaml":
+                return BrokenYamlModule()
+            return object()
+
+        with patch("scripts.health_check.importlib.import_module", side_effect=fake_import):
+            errors = health_check._check_dependencies()
+        self.assertTrue(any("broken dependency 'yaml'" in err for err in errors))
+        self.assertTrue(any("safe_load" in err for err in errors))
+
+    def test_main_skips_config_check_when_dependencies_fail(self):
+        with patch("scripts.health_check._check_python", return_value=[]), patch(
+            "scripts.health_check._check_dependencies", return_value=["missing dependency 'yaml': broken"]
+        ), patch("scripts.health_check._check_config_and_paths", return_value=[]) as config_check, patch(
+            "sys.stdout", new_callable=StringIO
+        ):
+            code = health_check.main()
+        self.assertEqual(code, 1)
+        config_check.assert_not_called()
 
     def test_single_mode_auto_scan_reports_no_sales_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:

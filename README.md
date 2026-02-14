@@ -89,6 +89,75 @@ python3 scripts/health_check.py
 ```
 - `run.sh` / `run.bat` also execute health check automatically before report generation.
 
+### Recover Broken Virtual Environment (`yaml.safe_load` missing)
+If health check shows:
+- `invalid config.yaml: module 'yaml' has no attribute 'safe_load'`, or
+- `broken dependency 'yaml': missing callable safe_load`
+
+use the minimal recovery flow below (manual only; scripts do not auto-heal environment):
+
+```bash
+# 1) remove broken venv
+rm -rf venv
+
+# 2) create clean venv
+python3 -m venv venv
+
+# 3) ensure pip works in this venv
+./venv/bin/python -m pip install --upgrade pip
+
+# 4) reinstall pinned dependencies
+./venv/bin/python -m pip install -r requirements.lock
+
+# 5) verify PyYAML is complete
+./venv/bin/python -c "import yaml; print(yaml.__file__, hasattr(yaml, 'safe_load'))"
+
+# 6) re-run health check
+./venv/bin/python scripts/health_check.py
+```
+
+Windows (CMD):
+```bat
+:: 1) remove broken venv
+rmdir /s /q venv
+
+:: 2) create clean venv
+py -3 -m venv venv
+
+:: 3) ensure pip works in this venv
+venv\Scripts\python -m pip install --upgrade pip
+
+:: 4) reinstall pinned dependencies
+venv\Scripts\python -m pip install -r requirements.lock
+
+:: 5) verify PyYAML is complete
+venv\Scripts\python -c "import yaml; print(yaml.__file__, hasattr(yaml, 'safe_load'))"
+
+:: 6) re-run health check
+venv\Scripts\python scripts\health_check.py
+```
+
+Windows (PowerShell):
+```powershell
+# 1) remove broken venv
+Remove-Item -Recurse -Force venv
+
+# 2) create clean venv
+py -3 -m venv venv
+
+# 3) ensure pip works in this venv
+venv\Scripts\python -m pip install --upgrade pip
+
+# 4) reinstall pinned dependencies
+venv\Scripts\python -m pip install -r requirements.lock
+
+# 5) verify PyYAML is complete
+venv\Scripts\python -c "import yaml; print(yaml.__file__, hasattr(yaml, 'safe_load'))"
+
+# 6) re-run health check
+venv\Scripts\python scripts\health_check.py
+```
+
 ## Testing
 - Full regression:
 ```bash

@@ -36,7 +36,15 @@ def _check_dependencies() -> list[str]:
     errors: list[str] = []
     for pkg in ("pandas", "openpyxl", "yaml", "xlrd"):
         try:
-            importlib.import_module(pkg)
+            module = importlib.import_module(pkg)
+            if pkg == "yaml":
+                safe_load = getattr(module, "safe_load", None)
+                if not callable(safe_load):
+                    module_path = getattr(module, "__file__", None)
+                    errors.append(
+                        "broken dependency 'yaml': missing callable safe_load "
+                        f"(module_path={module_path!r}). Rebuild venv and reinstall requirements.lock."
+                    )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"missing dependency '{pkg}': {exc}")
     return errors
@@ -127,21 +135,33 @@ def _check_config_and_paths() -> list[str]:
 
 
 def main() -> int:
-    checks = [
-        ("Python version", _check_python),
-        ("Dependencies", _check_dependencies),
-        ("Config and paths", _check_config_and_paths),
-    ]
     failures = 0
-    for name, fn in checks:
-        errs = fn()
-        if errs:
-            failures += len(errs)
-            _fail(name)
-            for err in errs:
+    python_errors = _check_python()
+    if python_errors:
+        failures += len(python_errors)
+        _fail("Python version")
+        for err in python_errors:
+            print(f"  - {err}")
+    else:
+        _ok("Python version")
+
+    dependency_errors = _check_dependencies()
+    if dependency_errors:
+        failures += len(dependency_errors)
+        _fail("Dependencies")
+        for err in dependency_errors:
+            print(f"  - {err}")
+        print("  - Config and paths check skipped due to dependency failures.")
+    else:
+        _ok("Dependencies")
+        config_errors = _check_config_and_paths()
+        if config_errors:
+            failures += len(config_errors)
+            _fail("Config and paths")
+            for err in config_errors:
                 print(f"  - {err}")
         else:
-            _ok(name)
+            _ok("Config and paths")
 
     if failures:
         print(f"\nHealth check failed with {failures} issue(s).")
