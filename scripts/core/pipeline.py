@@ -81,11 +81,12 @@ def _load_sales_data(
     brand_keywords: List[str],
     sales_date_format: str,
     sales_date_dayfirst: bool,
-) -> tuple[pd.DataFrame, int, List[str], int]:
+) -> tuple[pd.DataFrame, int, List[str], int, int]:
     sales_data: List[pd.DataFrame] = []
     loaded_sales_file_count = 0
     missing_sales_files: List[str] = []
     invalid_sales_date_rows = 0
+    invalid_sales_qty_rows = 0
 
     for filepath in sales_candidates:
         if not filepath.exists():
@@ -94,8 +95,10 @@ def _load_sales_data(
             continue
         df = core_io.read_excel_first_sheet(filepath)
         df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col = core_io.normalize_sales_df(df)
+        invalid_sales_qty_rows += int(df.attrs.get("invalid_qty_rows", 0))
 
         national_barcode_col = core_io.find_column(df.columns.tolist(), ["国条码"])
+        product_code_col = core_io.find_column(df.columns.tolist(), ["商品编码.1", "商品编码"])
         sales_columns = [store_col, product_col, barcode_col, qty_col, date_col]
         normalized_sales_columns = ["store", "product", "barcode", "sales_qty", "sales_date"]
         if brand_col is not None:
@@ -103,7 +106,10 @@ def _load_sales_data(
             normalized_sales_columns.insert(1, "brand")
         if national_barcode_col is not None and national_barcode_col != barcode_col:
             sales_columns.append(national_barcode_col)
-            normalized_sales_columns.append("national_barcode")
+            normalized_sales_columns.append("national_barcode_raw")
+        if product_code_col is not None and product_code_col != barcode_col:
+            sales_columns.append(product_code_col)
+            normalized_sales_columns.append("product_code")
         if supplier_card_col is not None:
             sales_columns.append(supplier_card_col)
             normalized_sales_columns.append("supplier_card")
@@ -113,10 +119,19 @@ def _load_sales_data(
         if "brand" not in df.columns:
             df["brand"] = None
         df["barcode"] = df["barcode"].apply(core_io.normalize_barcode_value)
-        if "national_barcode" in df.columns:
-            df["national_barcode"] = df["national_barcode"].apply(core_io.normalize_barcode_value)
+        if "national_barcode_raw" in df.columns:
+            df["national_barcode"] = df["national_barcode_raw"].apply(core_io.normalize_barcode_value)
+            df = df.drop(columns=["national_barcode_raw"])
+        elif barcode_col == "国条码":
+            df["national_barcode"] = df["barcode"]
         else:
             df["national_barcode"] = None
+        if "product_code" in df.columns:
+            df["product_code"] = df["product_code"].apply(core_io.normalize_barcode_value)
+        elif barcode_col in {"商品编码.1", "商品编码"}:
+            df["product_code"] = df["barcode"]
+        else:
+            df["product_code"] = None
         df["display_barcode"] = df["national_barcode"].where(df["national_barcode"].notna(), df["barcode"])
         if "supplier_card" not in df.columns:
             df["supplier_card"] = None
@@ -135,7 +150,7 @@ def _load_sales_data(
         raise RuntimeError("[input_read] No sales files were loaded.")
 
     sales_df = pd.concat(sales_data, ignore_index=True)
-    return sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows
+    return sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows, invalid_sales_qty_rows
 
 
 def _compute_window_context(
@@ -241,6 +256,7 @@ def generate_report_for_system(
 
     if inv_brand is None:
         raise stage_error("normalize", ValueError("Inventory brand column normalization failed unexpectedly."))
+    invalid_inventory_qty_rows = int(inv_df.attrs.get("invalid_qty_rows", 0))
 
     inventory_columns = [inv_store, inv_brand, inv_product, inv_barcode, inv_qty]
     if inv_supplier_card is not None:
@@ -261,7 +277,7 @@ def generate_report_for_system(
     fail_on_empty_window = bool(config.get("fail_on_empty_window", False))
 
     try:
-        sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows = _load_sales_data(
+        sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows, invalid_sales_qty_rows = _load_sales_data(
             sales_candidates,
             brand_keywords,
             sales_date_format,
@@ -271,6 +287,43 @@ def generate_report_for_system(
         if isinstance(exc, RuntimeError) and str(exc).startswith("[input_read]"):
             raise
         raise stage_error("normalize", exc) from exc
+
+    wumei_barcode_map_hits = 0
+    wumei_barcode_map_fallback = 0
+    wumei_barcode_map_conflicts = 0
+    wumei_barcode_conflict_samples = ""
+    if is_wumei_system:
+        code_to_national_map, wumei_barcode_map_conflicts = core_io.build_unambiguous_source_to_target_map(
+            sales_df,
+            source_col="product_code",
+            target_col="national_barcode",
+            output_col="national_barcode_mapped",
+        )
+        conflict_base = sales_df[["product_code", "national_barcode"]].copy()
+        conflict_base["product_code"] = conflict_base["product_code"].apply(core_io.normalize_barcode_value)
+        conflict_base["national_barcode"] = conflict_base["national_barcode"].apply(core_io.normalize_barcode_value)
+        conflict_base = conflict_base.dropna(subset=["product_code", "national_barcode"]).drop_duplicates(
+            subset=["product_code", "national_barcode"]
+        )
+        if not conflict_base.empty:
+            conflict_counts = conflict_base.groupby("product_code")["national_barcode"].nunique()
+            conflict_codes = conflict_counts[conflict_counts > 1].index.tolist()
+            if conflict_codes:
+                wumei_barcode_conflict_samples = " | ".join(conflict_codes[:10])
+        if code_to_national_map.empty:
+            wumei_barcode_map_fallback = int(len(inv_df))
+        else:
+            inv_df = inv_df.merge(
+                code_to_national_map,
+                left_on="barcode",
+                right_on="product_code",
+                how="left",
+            )
+            mapped_mask = inv_df["national_barcode_mapped"].notna()
+            wumei_barcode_map_hits = int(mapped_mask.sum())
+            wumei_barcode_map_fallback = int((~mapped_mask).sum())
+            inv_df.loc[mapped_mask, "barcode"] = inv_df.loc[mapped_mask, "national_barcode_mapped"]
+            inv_df = inv_df.drop(columns=["product_code", "national_barcode_mapped"])
 
     carton_factor_path = Path(carton_factor_file)
     if not carton_factor_path.is_absolute():
@@ -387,6 +440,8 @@ def generate_report_for_system(
         ["3M+MTD窗口有效天数", int(mtd_days)],
         ["30天窗口有效天数", int(recent_days_effective)],
         ["销售无效日期行数", invalid_sales_date_rows],
+        ["销售数量解析失败行数", int(invalid_sales_qty_rows)],
+        ["库存数量解析失败行数", int(invalid_inventory_qty_rows)],
         ["建议补货清单缺失装箱因子行数", int((replenish_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in replenish_out.columns else 0],
         ["建议调货清单缺失装箱因子行数", int((transfer_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in transfer_out.columns else 0],
         ["同店同条码重复键数", int(mapping_stats.get("duplicate_store_barcode_keys", 0))],
@@ -396,6 +451,16 @@ def generate_report_for_system(
         ["窗口数据状态", "正常" if (has_mtd_window_data and has_recent_window_data) else f"警告: 3M+MTD有效={has_mtd_window_data}, 30天有效={has_recent_window_data}"],
         ["自动扫描忽略销售文件数", len(ignored_sales_files)],
     ]
+    if is_wumei_system:
+        status_rows.extend(
+            [
+                ["物美条码映射命中行数", wumei_barcode_map_hits],
+                ["物美条码映射回退行数", wumei_barcode_map_fallback],
+                ["物美条码映射冲突编码数", wumei_barcode_map_conflicts],
+            ]
+        )
+        if wumei_barcode_conflict_samples:
+            status_rows.append(["物美条码映射冲突编码样例", wumei_barcode_conflict_samples])
     if ignored_sales_files:
         status_rows.append(["自动扫描忽略销售文件", core_io.format_ignored_sales_files(ignored_sales_files)])
     if missing_sales_files:

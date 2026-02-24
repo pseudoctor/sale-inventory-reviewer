@@ -66,10 +66,11 @@ batch:
         - "陕西华润销售202601.xlsx"
         - "陕西华润销售202602.xlsx"
       inventory_file: "陕西华润库存.xlsx"
-    - enabled: false
+    - enabled: true
       system_id: "gansu_huarun"
       display_name: "甘肃华润"
       data_subdir: "甘肃华润"
       sales_files:
-        - "甘肃华润202602.xlsx"
-      inventory_file: "甘肃华润202602.xlsx"
+        - "甘肃华润销售202601.xlsx"
+        - "甘肃华润销售202602.xlsx"
+      inventory_file: "甘肃华润库存.xlsx"

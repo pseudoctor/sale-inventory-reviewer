@@ -49,6 +49,13 @@ if errorlevel 1 (
 )
 
 python scripts\generate_inventory_risk_report.py
+if errorlevel 1 (
+  echo Report generation failed.
+  if /I not "%CI%"=="true" (
+    if /I not "%NO_PAUSE%"=="1" pause
+  )
+  exit /b 1
+)
 
 echo Generation complete. Reports written under: reports\
 echo Batch mode summary: reports\batch_run_summary.xlsx

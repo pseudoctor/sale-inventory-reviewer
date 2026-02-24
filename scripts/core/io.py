@@ -116,6 +116,31 @@ def normalize_supplier_card_value(value) -> Optional[str]:
     return normalize_barcode_value(value)
 
 
+def normalize_numeric_value(value) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return None
+        return float(value)
+    text = str(value).strip()
+    if text == "" or text.lower() in {"nan", "none"}:
+        return None
+    cleaned = text.replace(",", "").replace("，", "")
+    numeric = pd.to_numeric(pd.Series([cleaned]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return None
+    return float(numeric)
+
+
+def normalize_numeric_series(values: pd.Series) -> tuple[pd.Series, int]:
+    normalized = values.apply(normalize_numeric_value)
+    raw_text = values.astype(str).str.strip()
+    raw_non_empty = values.notna() & ~raw_text.str.lower().isin({"", "nan", "none"})
+    invalid_rows = int((raw_non_empty & normalized.isna()).sum())
+    return pd.to_numeric(normalized, errors="coerce").fillna(0), invalid_rows
+
+
 def pick_first_non_empty(series: pd.Series) -> Optional[str]:
     for value in series:
         normalized = normalize_supplier_card_value(value)
@@ -136,6 +161,28 @@ def build_unambiguous_barcode_map(df: pd.DataFrame, group_cols: List[str], value
     one_to_one = one_to_one[one_to_one["_nuniq"] == 1].drop(columns=["_nuniq"])
     one_to_one = one_to_one.drop_duplicates(subset=group_cols, keep="first")
     return one_to_one.rename(columns={value_col: output_col})
+
+
+def build_unambiguous_source_to_target_map(
+    df: pd.DataFrame,
+    source_col: str,
+    target_col: str,
+    output_col: str,
+) -> tuple[pd.DataFrame, int]:
+    base = df[[source_col, target_col]].copy()
+    base[source_col] = base[source_col].apply(normalize_barcode_value)
+    base[target_col] = base[target_col].apply(normalize_barcode_value)
+    base = base[base[source_col].notna() & base[target_col].notna()]
+    if base.empty:
+        return pd.DataFrame(columns=[source_col, output_col]), 0
+
+    dedup = base.drop_duplicates(subset=[source_col, target_col], keep="first")
+    counts = dedup.groupby(source_col, as_index=False)[target_col].nunique().rename(columns={target_col: "_nuniq"})
+    ambiguous_sources = int((counts["_nuniq"] > 1).sum())
+    one_to_one = dedup.merge(counts, on=source_col, how="left")
+    one_to_one = one_to_one[one_to_one["_nuniq"] == 1].drop(columns=["_nuniq"])
+    one_to_one = one_to_one.drop_duplicates(subset=[source_col], keep="first")
+    return one_to_one.rename(columns={target_col: output_col}), ambiguous_sources
 
 
 def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[str], str, str, str, str, Optional[str]]:
@@ -164,7 +211,9 @@ def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[st
         ]
         raise ValueError(f"Missing required sales columns: {', '.join(missing)}")
 
-    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
+    qty_series, invalid_qty_rows = normalize_numeric_series(df[qty_col])
+    df[qty_col] = qty_series
+    df.attrs["invalid_qty_rows"] = invalid_qty_rows
     return df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col
 
 
@@ -192,7 +241,9 @@ def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optiona
         ]
         raise ValueError(f"Missing required inventory columns: {', '.join(missing)}")
 
-    df[qty_col] = pd.to_numeric(df[qty_col], errors="coerce").fillna(0)
+    qty_series, invalid_qty_rows = normalize_numeric_series(df[qty_col])
+    df[qty_col] = qty_series
+    df.attrs["invalid_qty_rows"] = invalid_qty_rows
     return df, store_col, brand_col, product_col, barcode_col, qty_col, supplier_card_col
 
 
