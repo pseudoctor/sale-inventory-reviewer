@@ -22,7 +22,7 @@ SUPPLIER_CARD_PROVINCE_MAP = {
     "152901": "监狱系统",
 }
 
-_CARTON_FACTOR_CACHE: Dict[Path, pd.DataFrame] = {}
+_CARTON_FACTOR_CACHE: Dict[Path, tuple[Optional[int], pd.DataFrame]] = {}
 
 
 def compute_config_snapshot(config: Dict[str, Any]) -> str:
@@ -69,11 +69,20 @@ def _effective_brand_keywords(config: Dict[str, Any]) -> List[str]:
 
 
 def _load_carton_factor_cached(path: Path) -> pd.DataFrame:
+    try:
+        mtime_ns: Optional[int] = path.stat().st_mtime_ns
+    except OSError:
+        mtime_ns = None
+
     cached = _CARTON_FACTOR_CACHE.get(path)
-    if cached is None:
-        cached = core_io.load_carton_factor_df(path)
-        _CARTON_FACTOR_CACHE[path] = cached
-    return cached
+    if cached is not None:
+        cached_mtime_ns, cached_df = cached
+        if cached_mtime_ns == mtime_ns:
+            return cached_df
+
+    loaded_df = core_io.load_carton_factor_df(path)
+    _CARTON_FACTOR_CACHE[path] = (mtime_ns, loaded_df)
+    return loaded_df
 
 
 def _load_sales_data(
@@ -189,6 +198,208 @@ def _compute_window_context(
     }
 
 
+def _prepare_inventory_data(
+    *,
+    inv_path: Path,
+    config: Dict[str, Any],
+    brand_keywords: List[str],
+    display_name: str,
+    base_dir: Path,
+) -> tuple[pd.DataFrame, Path, pd.Timestamp, str, int]:
+    inv_df = core_io.read_excel_first_sheet(inv_path)
+    inv_df = core_io.ensure_inventory_brand_column(inv_df, brand_keywords)
+    inventory_date_text = core_io.extract_inventory_date(inv_df)
+    parsed_inventory_date = pd.to_datetime(inventory_date_text, errors="coerce")
+    if pd.isna(parsed_inventory_date):
+        raise ValueError(f"Invalid inventory date: {inventory_date_text}")
+    inventory_date_ts = pd.Timestamp(parsed_inventory_date).normalize()
+    inventory_date = inventory_date_ts.date().isoformat()
+    output_file = core_config.resolve_output_file_path(config, display_name, inventory_date, base_dir)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    inv_df, inv_store, inv_brand, inv_product, inv_barcode, inv_qty, inv_supplier_card = core_io.normalize_inventory_df(inv_df)
+    if inv_brand is None:
+        raise ValueError("Inventory brand column normalization failed unexpectedly.")
+    invalid_inventory_qty_rows = int(inv_df.attrs.get("invalid_qty_rows", 0))
+
+    inventory_columns = [inv_store, inv_brand, inv_product, inv_barcode, inv_qty]
+    if inv_supplier_card is not None:
+        inventory_columns.append(inv_supplier_card)
+    inv_df = inv_df[inventory_columns].copy()
+    inv_df.columns = ["store", "brand", "product", "barcode", "inventory_qty"] + (
+        ["supplier_card"] if inv_supplier_card is not None else []
+    )
+    inv_df["barcode"] = inv_df["barcode"].apply(core_io.normalize_barcode_value)
+    if "supplier_card" not in inv_df.columns:
+        inv_df["supplier_card"] = None
+    inv_df["supplier_card"] = inv_df["supplier_card"].apply(core_io.normalize_supplier_card_value)
+
+    return inv_df, output_file, inventory_date_ts, inventory_date, invalid_inventory_qty_rows
+
+
+def _apply_wumei_barcode_mapping(
+    *,
+    inv_df: pd.DataFrame,
+    sales_df: pd.DataFrame,
+    is_wumei_system: bool,
+) -> tuple[pd.DataFrame, int, int, int, str]:
+    if not is_wumei_system:
+        return inv_df, 0, 0, 0, ""
+
+    wumei_barcode_map_hits = 0
+    wumei_barcode_map_fallback = 0
+    wumei_barcode_map_conflicts = 0
+    wumei_barcode_conflict_samples = ""
+
+    code_to_national_map, wumei_barcode_map_conflicts = core_io.build_unambiguous_source_to_target_map(
+        sales_df,
+        source_col="product_code",
+        target_col="national_barcode",
+        output_col="national_barcode_mapped",
+    )
+    conflict_base = sales_df[["product_code", "national_barcode"]].copy()
+    conflict_base["product_code"] = conflict_base["product_code"].apply(core_io.normalize_barcode_value)
+    conflict_base["national_barcode"] = conflict_base["national_barcode"].apply(core_io.normalize_barcode_value)
+    conflict_base = conflict_base.dropna(subset=["product_code", "national_barcode"]).drop_duplicates(
+        subset=["product_code", "national_barcode"]
+    )
+    if not conflict_base.empty:
+        conflict_counts = conflict_base.groupby("product_code")["national_barcode"].nunique()
+        conflict_codes = conflict_counts[conflict_counts > 1].index.tolist()
+        if conflict_codes:
+            wumei_barcode_conflict_samples = " | ".join(conflict_codes[:10])
+
+    if code_to_national_map.empty:
+        wumei_barcode_map_fallback = int(len(inv_df))
+        return inv_df, wumei_barcode_map_hits, wumei_barcode_map_fallback, wumei_barcode_map_conflicts, wumei_barcode_conflict_samples
+
+    inv_df = inv_df.merge(
+        code_to_national_map,
+        left_on="barcode",
+        right_on="product_code",
+        how="left",
+    )
+    mapped_mask = inv_df["national_barcode_mapped"].notna()
+    wumei_barcode_map_hits = int(mapped_mask.sum())
+    wumei_barcode_map_fallback = int((~mapped_mask).sum())
+    inv_df.loc[mapped_mask, "barcode"] = inv_df.loc[mapped_mask, "national_barcode_mapped"]
+    inv_df = inv_df.drop(columns=["product_code", "national_barcode_mapped"])
+    return inv_df, wumei_barcode_map_hits, wumei_barcode_map_fallback, wumei_barcode_map_conflicts, wumei_barcode_conflict_samples
+
+
+def _apply_recommendation_columns(detail: pd.DataFrame, low_days: float, high_days: float) -> pd.DataFrame:
+    detail = detail.copy()
+    detail["out_of_stock"] = np.where((detail["forecast_daily_sales"] > 0) & (detail["inventory_qty"] == 0), "是", "否")
+    detail["daily_demand"] = detail["forecast_daily_sales"]
+    detail["low_target_qty"] = detail["daily_demand"] * low_days
+    detail["high_keep_qty"] = detail["daily_demand"] * high_days
+    detail["need_qty"] = np.where(
+        detail["forecast_daily_sales"] > 0,
+        np.ceil(np.maximum(0, detail["low_target_qty"] - detail["inventory_qty"])),
+        0,
+    )
+    detail["suggest_outbound_qty"] = np.where(
+        (detail["risk_level"] == "高") & (detail["forecast_daily_sales"] > 0),
+        np.floor(np.maximum(0, detail["inventory_qty"] - detail["high_keep_qty"])),
+        0,
+    )
+    detail["suggest_replenish_qty"] = np.where(
+        (detail["risk_level"] == "低") | (detail["out_of_stock"] == "是"),
+        detail["need_qty"],
+        0,
+    )
+    detail["suggest_outbound_qty"] = detail["suggest_outbound_qty"].astype(int)
+    detail["suggest_replenish_qty"] = detail["suggest_replenish_qty"].astype(int)
+    return detail
+
+
+def _build_summary_frame(detail_out: pd.DataFrame, out_of_stock_out: pd.DataFrame, missing_sku_out: pd.DataFrame, detail: pd.DataFrame) -> pd.DataFrame:
+    summary_rows = [
+        ["风险等级-高", int((detail_out["风险等级"] == "高").sum())],
+        ["风险等级-中", int((detail_out["风险等级"] == "中").sum())],
+        ["风险等级-低", int((detail_out["风险等级"] == "低").sum())],
+        ["缺货SKU数(库存=0)", int(len(out_of_stock_out))],
+        ["库存缺失SKU数(销售有库存无)", int(len(missing_sku_out))],
+        ["库存总量", float(detail_out["库存数量"].sum())],
+        ["近三月+本月迄今平均日销总量", round(float(detail_out["近三月+本月迄今平均日销"].sum()), 1)],
+        ["近30天平均日销售总量", round(float(detail_out["近30天平均日销售"].sum()), 1)],
+        ["预测平均日销总量(季节模式后)", round(float(detail["forecast_daily_sales"].sum()), 1)],
+    ]
+    return pd.DataFrame(summary_rows, columns=["指标", "数值"])
+
+
+def _build_status_frame(
+    *,
+    program_version: str,
+    config: Dict[str, Any],
+    display_name: str,
+    system_id: str,
+    inventory_date: str,
+    loaded_sales_file_count: int,
+    missing_sales_files: List[str],
+    use_peak_mode: bool,
+    strict_auto_scan: bool,
+    has_mtd_window_data: bool,
+    has_recent_window_data: bool,
+    mtd_days: int,
+    recent_days_effective: int,
+    invalid_sales_date_rows: int,
+    invalid_sales_qty_rows: int,
+    invalid_inventory_qty_rows: int,
+    replenish_out: pd.DataFrame,
+    transfer_out: pd.DataFrame,
+    mapping_stats: Dict[str, float],
+    ignored_sales_files: List[str],
+    is_wumei_system: bool,
+    wumei_barcode_map_hits: int,
+    wumei_barcode_map_fallback: int,
+    wumei_barcode_map_conflicts: int,
+    wumei_barcode_conflict_samples: str,
+) -> pd.DataFrame:
+    status_rows = [
+        ["程序版本", program_version],
+        ["配置快照", compute_config_snapshot(config)],
+        ["系统名称", display_name],
+        ["系统标识", system_id],
+        ["库存日期", inventory_date],
+        ["输入销售文件数", loaded_sales_file_count],
+        ["缺失销售文件数", len(missing_sales_files)],
+        ["输入文件总数", loaded_sales_file_count + 1],
+        ["季节模式", "旺季(取高值)" if use_peak_mode else "淡季(取低值)"],
+        ["严格自动扫描", "是" if strict_auto_scan else "否"],
+        ["3M+MTD窗口有效", "是" if has_mtd_window_data else "否"],
+        ["30天窗口有效", "是" if has_recent_window_data else "否"],
+        ["3M+MTD窗口有效天数", int(mtd_days)],
+        ["30天窗口有效天数", int(recent_days_effective)],
+        ["销售无效日期行数", invalid_sales_date_rows],
+        ["销售数量解析失败行数", int(invalid_sales_qty_rows)],
+        ["库存数量解析失败行数", int(invalid_inventory_qty_rows)],
+        ["建议补货清单缺失装箱因子行数", int((replenish_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in replenish_out.columns else 0],
+        ["建议调货清单缺失装箱因子行数", int((transfer_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in transfer_out.columns else 0],
+        ["同店同条码重复键数", int(mapping_stats.get("duplicate_store_barcode_keys", 0))],
+        ["名称冲突键数", int(mapping_stats.get("name_conflict_keys", 0))],
+        ["品牌冲突键数", int(mapping_stats.get("brand_conflict_keys", 0))],
+        ["映射覆盖率", f"{float(mapping_stats.get('mapping_coverage_rate', 0.0)) * 100:.1f}%"],
+        ["窗口数据状态", "正常" if (has_mtd_window_data and has_recent_window_data) else f"警告: 3M+MTD有效={has_mtd_window_data}, 30天有效={has_recent_window_data}"],
+        ["自动扫描忽略销售文件数", len(ignored_sales_files)],
+    ]
+    if is_wumei_system:
+        status_rows.extend(
+            [
+                ["物美条码映射命中行数", wumei_barcode_map_hits],
+                ["物美条码映射回退行数", wumei_barcode_map_fallback],
+                ["物美条码映射冲突编码数", wumei_barcode_map_conflicts],
+            ]
+        )
+        if wumei_barcode_conflict_samples:
+            status_rows.append(["物美条码映射冲突编码样例", wumei_barcode_conflict_samples])
+    if ignored_sales_files:
+        status_rows.append(["自动扫描忽略销售文件", core_io.format_ignored_sales_files(ignored_sales_files)])
+    if missing_sales_files:
+        status_rows.append(["缺失销售文件", " | ".join(missing_sales_files)])
+    return pd.DataFrame(status_rows, columns=["状态项", "值"])
+
+
 def generate_report_for_system(
     system_cfg: Dict[str, Any],
     global_cfg: Optional[Dict[str, Any]] = None,
@@ -240,33 +451,15 @@ def generate_report_for_system(
         raise FileNotFoundError(f"Inventory file not found: {inv_path}")
 
     try:
-        inv_df = core_io.read_excel_first_sheet(inv_path)
-        inv_df = core_io.ensure_inventory_brand_column(inv_df, brand_keywords)
-        inventory_date_text = core_io.extract_inventory_date(inv_df)
-        parsed_inventory_date = pd.to_datetime(inventory_date_text, errors="coerce")
-        if pd.isna(parsed_inventory_date):
-            raise ValueError(f"Invalid inventory date: {inventory_date_text}")
-        inventory_date_ts = pd.Timestamp(parsed_inventory_date).normalize()
-        inventory_date = inventory_date_ts.date().isoformat()
-        output_file = core_config.resolve_output_file_path(config, display_name, inventory_date, base_dir)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        inv_df, inv_store, inv_brand, inv_product, inv_barcode, inv_qty, inv_supplier_card = core_io.normalize_inventory_df(inv_df)
+        inv_df, output_file, inventory_date_ts, inventory_date, invalid_inventory_qty_rows = _prepare_inventory_data(
+            inv_path=inv_path,
+            config=config,
+            brand_keywords=brand_keywords,
+            display_name=display_name,
+            base_dir=base_dir,
+        )
     except Exception as exc:  # noqa: BLE001
         raise stage_error("normalize", exc) from exc
-
-    if inv_brand is None:
-        raise stage_error("normalize", ValueError("Inventory brand column normalization failed unexpectedly."))
-    invalid_inventory_qty_rows = int(inv_df.attrs.get("invalid_qty_rows", 0))
-
-    inventory_columns = [inv_store, inv_brand, inv_product, inv_barcode, inv_qty]
-    if inv_supplier_card is not None:
-        inventory_columns.append(inv_supplier_card)
-    inv_df = inv_df[inventory_columns].copy()
-    inv_df.columns = ["store", "brand", "product", "barcode", "inventory_qty"] + (["supplier_card"] if inv_supplier_card is not None else [])
-    inv_df["barcode"] = inv_df["barcode"].apply(core_io.normalize_barcode_value)
-    if "supplier_card" not in inv_df.columns:
-        inv_df["supplier_card"] = None
-    inv_df["supplier_card"] = inv_df["supplier_card"].apply(core_io.normalize_supplier_card_value)
 
     full_months = int(config.get("sales_window_full_months", 3))
     include_mtd = bool(config.get("sales_window_include_mtd", True))
@@ -288,42 +481,13 @@ def generate_report_for_system(
             raise
         raise stage_error("normalize", exc) from exc
 
-    wumei_barcode_map_hits = 0
-    wumei_barcode_map_fallback = 0
-    wumei_barcode_map_conflicts = 0
-    wumei_barcode_conflict_samples = ""
-    if is_wumei_system:
-        code_to_national_map, wumei_barcode_map_conflicts = core_io.build_unambiguous_source_to_target_map(
-            sales_df,
-            source_col="product_code",
-            target_col="national_barcode",
-            output_col="national_barcode_mapped",
+    inv_df, wumei_barcode_map_hits, wumei_barcode_map_fallback, wumei_barcode_map_conflicts, wumei_barcode_conflict_samples = (
+        _apply_wumei_barcode_mapping(
+            inv_df=inv_df,
+            sales_df=sales_df,
+            is_wumei_system=is_wumei_system,
         )
-        conflict_base = sales_df[["product_code", "national_barcode"]].copy()
-        conflict_base["product_code"] = conflict_base["product_code"].apply(core_io.normalize_barcode_value)
-        conflict_base["national_barcode"] = conflict_base["national_barcode"].apply(core_io.normalize_barcode_value)
-        conflict_base = conflict_base.dropna(subset=["product_code", "national_barcode"]).drop_duplicates(
-            subset=["product_code", "national_barcode"]
-        )
-        if not conflict_base.empty:
-            conflict_counts = conflict_base.groupby("product_code")["national_barcode"].nunique()
-            conflict_codes = conflict_counts[conflict_counts > 1].index.tolist()
-            if conflict_codes:
-                wumei_barcode_conflict_samples = " | ".join(conflict_codes[:10])
-        if code_to_national_map.empty:
-            wumei_barcode_map_fallback = int(len(inv_df))
-        else:
-            inv_df = inv_df.merge(
-                code_to_national_map,
-                left_on="barcode",
-                right_on="product_code",
-                how="left",
-            )
-            mapped_mask = inv_df["national_barcode_mapped"].notna()
-            wumei_barcode_map_hits = int(mapped_mask.sum())
-            wumei_barcode_map_fallback = int((~mapped_mask).sum())
-            inv_df.loc[mapped_mask, "barcode"] = inv_df.loc[mapped_mask, "national_barcode_mapped"]
-            inv_df = inv_df.drop(columns=["product_code", "national_barcode_mapped"])
+    )
 
     carton_factor_path = Path(carton_factor_file)
     if not carton_factor_path.is_absolute():
@@ -372,28 +536,7 @@ def generate_report_for_system(
         is_wumei_system=is_wumei_system,
         province_mapper=map_province_by_supplier_card,
     )
-    detail["out_of_stock"] = np.where((detail["forecast_daily_sales"] > 0) & (detail["inventory_qty"] == 0), "是", "否")
-
-    detail["daily_demand"] = detail["forecast_daily_sales"]
-    detail["low_target_qty"] = detail["daily_demand"] * low_days
-    detail["high_keep_qty"] = detail["daily_demand"] * high_days
-    detail["need_qty"] = np.where(
-        detail["forecast_daily_sales"] > 0,
-        np.ceil(np.maximum(0, detail["low_target_qty"] - detail["inventory_qty"])),
-        0,
-    )
-    detail["suggest_outbound_qty"] = np.where(
-        (detail["risk_level"] == "高") & (detail["forecast_daily_sales"] > 0),
-        np.floor(np.maximum(0, detail["inventory_qty"] - detail["high_keep_qty"])),
-        0,
-    )
-    detail["suggest_replenish_qty"] = np.where(
-        (detail["risk_level"] == "低") | (detail["out_of_stock"] == "是"),
-        detail["need_qty"],
-        0,
-    )
-    detail["suggest_outbound_qty"] = detail["suggest_outbound_qty"].astype(int)
-    detail["suggest_replenish_qty"] = detail["suggest_replenish_qty"].astype(int)
+    detail = _apply_recommendation_columns(detail, low_days, high_days)
 
     frames = core_output_tables.build_report_frames(
         detail=detail,
@@ -411,61 +554,34 @@ def generate_report_for_system(
     replenish_out = frames["建议补货清单"]
     transfer_out = frames["建议调货清单"]
 
-    summary_rows = [
-        ["风险等级-高", int((detail_out["风险等级"] == "高").sum())],
-        ["风险等级-中", int((detail_out["风险等级"] == "中").sum())],
-        ["风险等级-低", int((detail_out["风险等级"] == "低").sum())],
-        ["缺货SKU数(库存=0)", int(len(out_of_stock_out))],
-        ["库存缺失SKU数(销售有库存无)", int(len(missing_sku_out))],
-        ["库存总量", float(detail_out["库存数量"].sum())],
-        ["近三月+本月迄今平均日销总量", round(float(detail_out["近三月+本月迄今平均日销"].sum()), 1)],
-        ["近30天平均日销售总量", round(float(detail_out["近30天平均日销售"].sum()), 1)],
-        ["预测平均日销总量(季节模式后)", round(float(detail["forecast_daily_sales"].sum()), 1)],
-    ]
-    summary_out = pd.DataFrame(summary_rows, columns=["指标", "数值"])
-
-    status_rows = [
-        ["程序版本", program_version],
-        ["配置快照", compute_config_snapshot(config)],
-        ["系统名称", display_name],
-        ["系统标识", system_id],
-        ["库存日期", inventory_date],
-        ["输入销售文件数", loaded_sales_file_count],
-        ["缺失销售文件数", len(missing_sales_files)],
-        ["输入文件总数", loaded_sales_file_count + 1],
-        ["季节模式", "旺季(取高值)" if use_peak_mode else "淡季(取低值)"],
-        ["严格自动扫描", "是" if strict_auto_scan else "否"],
-        ["3M+MTD窗口有效", "是" if has_mtd_window_data else "否"],
-        ["30天窗口有效", "是" if has_recent_window_data else "否"],
-        ["3M+MTD窗口有效天数", int(mtd_days)],
-        ["30天窗口有效天数", int(recent_days_effective)],
-        ["销售无效日期行数", invalid_sales_date_rows],
-        ["销售数量解析失败行数", int(invalid_sales_qty_rows)],
-        ["库存数量解析失败行数", int(invalid_inventory_qty_rows)],
-        ["建议补货清单缺失装箱因子行数", int((replenish_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in replenish_out.columns else 0],
-        ["建议调货清单缺失装箱因子行数", int((transfer_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in transfer_out.columns else 0],
-        ["同店同条码重复键数", int(mapping_stats.get("duplicate_store_barcode_keys", 0))],
-        ["名称冲突键数", int(mapping_stats.get("name_conflict_keys", 0))],
-        ["品牌冲突键数", int(mapping_stats.get("brand_conflict_keys", 0))],
-        ["映射覆盖率", f"{float(mapping_stats.get('mapping_coverage_rate', 0.0)) * 100:.1f}%"],
-        ["窗口数据状态", "正常" if (has_mtd_window_data and has_recent_window_data) else f"警告: 3M+MTD有效={has_mtd_window_data}, 30天有效={has_recent_window_data}"],
-        ["自动扫描忽略销售文件数", len(ignored_sales_files)],
-    ]
-    if is_wumei_system:
-        status_rows.extend(
-            [
-                ["物美条码映射命中行数", wumei_barcode_map_hits],
-                ["物美条码映射回退行数", wumei_barcode_map_fallback],
-                ["物美条码映射冲突编码数", wumei_barcode_map_conflicts],
-            ]
-        )
-        if wumei_barcode_conflict_samples:
-            status_rows.append(["物美条码映射冲突编码样例", wumei_barcode_conflict_samples])
-    if ignored_sales_files:
-        status_rows.append(["自动扫描忽略销售文件", core_io.format_ignored_sales_files(ignored_sales_files)])
-    if missing_sales_files:
-        status_rows.append(["缺失销售文件", " | ".join(missing_sales_files)])
-    status_out = pd.DataFrame(status_rows, columns=["状态项", "值"])
+    summary_out = _build_summary_frame(detail_out, out_of_stock_out, missing_sku_out, detail)
+    status_out = _build_status_frame(
+        program_version=program_version,
+        config=config,
+        display_name=display_name,
+        system_id=system_id,
+        inventory_date=inventory_date,
+        loaded_sales_file_count=loaded_sales_file_count,
+        missing_sales_files=missing_sales_files,
+        use_peak_mode=use_peak_mode,
+        strict_auto_scan=strict_auto_scan,
+        has_mtd_window_data=has_mtd_window_data,
+        has_recent_window_data=has_recent_window_data,
+        mtd_days=mtd_days,
+        recent_days_effective=recent_days_effective,
+        invalid_sales_date_rows=invalid_sales_date_rows,
+        invalid_sales_qty_rows=invalid_sales_qty_rows,
+        invalid_inventory_qty_rows=invalid_inventory_qty_rows,
+        replenish_out=replenish_out,
+        transfer_out=transfer_out,
+        mapping_stats=mapping_stats,
+        ignored_sales_files=ignored_sales_files,
+        is_wumei_system=is_wumei_system,
+        wumei_barcode_map_hits=wumei_barcode_map_hits,
+        wumei_barcode_map_fallback=wumei_barcode_map_fallback,
+        wumei_barcode_map_conflicts=wumei_barcode_map_conflicts,
+        wumei_barcode_conflict_samples=wumei_barcode_conflict_samples,
+    )
 
     sheets = dict(frames)
     sheets["汇总"] = summary_out

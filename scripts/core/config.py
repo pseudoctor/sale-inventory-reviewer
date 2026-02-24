@@ -42,6 +42,13 @@ DEFAULT_CONFIG = {
 }
 
 
+def _validate_bool_field(config: Dict[str, Any], key: str, default: bool, error_message: str) -> bool:
+    value = config.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(error_message)
+    return value
+
+
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     run_mode = str(config.get("run_mode", "single")).strip().lower()
     if run_mode not in {"single", "batch"}:
@@ -91,12 +98,8 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if recent_days <= 0:
         raise ValueError("sales_window_recent_days must be > 0.")
 
-    include_mtd = config.get("sales_window_include_mtd", True)
-    if not isinstance(include_mtd, bool):
-        raise ValueError("sales_window_include_mtd must be true/false.")
-    sales_date_dayfirst = config.get("sales_date_dayfirst", False)
-    if not isinstance(sales_date_dayfirst, bool):
-        raise ValueError("sales_date_dayfirst must be true/false.")
+    _validate_bool_field(config, "sales_window_include_mtd", True, "sales_window_include_mtd must be true/false.")
+    _validate_bool_field(config, "sales_date_dayfirst", False, "sales_date_dayfirst must be true/false.")
     sales_date_format = config.get("sales_date_format", "")
     if not isinstance(sales_date_format, str):
         raise ValueError("sales_date_format must be a string.")
@@ -109,13 +112,8 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         if mode_text not in {"true", "false", "peak", "off_peak"}:
             raise ValueError("season_mode string must be one of: true, false, peak, off_peak.")
 
-    fail_on_empty_window = config.get("fail_on_empty_window", False)
-    if not isinstance(fail_on_empty_window, bool):
-        raise ValueError("fail_on_empty_window must be true/false.")
-
-    strict_auto_scan = config.get("strict_auto_scan", False)
-    if not isinstance(strict_auto_scan, bool):
-        raise ValueError("strict_auto_scan must be true/false.")
+    _validate_bool_field(config, "fail_on_empty_window", False, "fail_on_empty_window must be true/false.")
+    _validate_bool_field(config, "strict_auto_scan", False, "strict_auto_scan must be true/false.")
 
     brand_keywords = config.get("brand_keywords")
     if not isinstance(brand_keywords, list):

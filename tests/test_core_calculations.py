@@ -1,6 +1,7 @@
 import unittest
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pandas as pd
@@ -26,6 +27,7 @@ from scripts.core import io as core_io
 from scripts.core import matching as core_matching
 from scripts.core import output_tables as core_output_tables
 from scripts.core import pipeline as core_pipeline
+from tests.helpers import build_single_config, write_excel
 
 
 class CoreCalculationsTest(unittest.TestCase):
@@ -264,6 +266,33 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertIs(out1, fake_df)
         self.assertIs(out2, fake_df)
         self.assertEqual(mocked.call_count, 1)
+
+    def test_load_carton_factor_cached_reload_when_file_mtime_changed(self):
+        core_pipeline._CARTON_FACTOR_CACHE.clear()
+        fake_path = Path("/tmp/fake_factor.xlsx")
+        first_df = pd.DataFrame({"商品条码": ["1"], "商品名称": ["A"], "装箱数（因子）": [6]})
+        second_df = pd.DataFrame({"商品条码": ["1"], "商品名称": ["A"], "装箱数（因子）": [8]})
+
+        with (
+            patch("scripts.core.pipeline.core_io.load_carton_factor_df", side_effect=[first_df, second_df]) as mocked_loader,
+            patch.object(
+                Path,
+                "stat",
+                side_effect=[
+                    SimpleNamespace(st_mtime_ns=100),
+                    SimpleNamespace(st_mtime_ns=100),
+                    SimpleNamespace(st_mtime_ns=200),
+                ],
+            ),
+        ):
+            out1 = core_pipeline._load_carton_factor_cached(fake_path)
+            out2 = core_pipeline._load_carton_factor_cached(fake_path)
+            out3 = core_pipeline._load_carton_factor_cached(fake_path)
+
+        self.assertIs(out1, first_df)
+        self.assertIs(out2, first_df)
+        self.assertIs(out3, second_df)
+        self.assertEqual(mocked_loader.call_count, 2)
 
     def test_normalize_sales_df_prefers_national_barcode_when_multiple_exist(self):
         df = pd.DataFrame(
@@ -535,7 +564,8 @@ class CoreCalculationsTest(unittest.TestCase):
             data_dir.mkdir(parents=True, exist_ok=True)
             reports_dir.mkdir(parents=True, exist_ok=True)
 
-            pd.DataFrame(
+            write_excel(
+                pd.DataFrame(
                 {
                     "门店名称": ["物美A店"],
                     "商品编码": ["817620"],
@@ -545,8 +575,11 @@ class CoreCalculationsTest(unittest.TestCase):
                     "销售数量": [10],
                     "销售时间": ["2026-02-08"],
                 }
-            ).to_excel(system_dir / "销售202602.xlsx", index=False)
-            pd.DataFrame(
+                ),
+                system_dir / "销售202602.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
                 {
                     "门店名称": ["物美A店"],
                     "商品编码": ["817620"],
@@ -554,38 +587,32 @@ class CoreCalculationsTest(unittest.TestCase):
                     "当前库存": [5],
                     "库存日期": ["2026-02-09"],
                 }
-            ).to_excel(system_dir / "库存.xlsx", index=False)
-            pd.DataFrame(
+                ),
+                system_dir / "库存.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
                 {
                     "商品条码": ["6970000000001"],
                     "商品名称": ["测试SKU"],
                     "装箱数（因子）": [6],
                 }
-            ).to_excel(data_dir / "sku装箱数.xlsx", index=False)
+                ),
+                data_dir / "sku装箱数.xlsx",
+            )
 
             output_file = reports_dir / "宁夏物美20260209库存预警.xlsx"
-            config = {
-                "run_mode": "single",
-                "system_id": "ningxia_wumei",
-                "display_name": "宁夏物美",
-                "raw_data_dir": str(root / "raw_data"),
-                "data_subdir": "宁夏物美",
-                "sales_files": ["销售202602.xlsx"],
-                "inventory_file": "库存.xlsx",
-                "output_file": str(output_file),
-                "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
-                "risk_days_high": 60,
-                "risk_days_low": 45,
-                "sales_window_full_months": 3,
-                "sales_window_include_mtd": True,
-                "sales_window_recent_days": 30,
-                "sales_date_dayfirst": False,
-                "sales_date_format": "",
-                "season_mode": False,
-                "fail_on_empty_window": False,
-                "strict_auto_scan": False,
-                "brand_keywords": ["品牌Y"],
-            }
+            config = build_single_config(
+                system_id="ningxia_wumei",
+                display_name="宁夏物美",
+                raw_data_dir=str(root / "raw_data"),
+                data_subdir="宁夏物美",
+                sales_files=["销售202602.xlsx"],
+                inventory_file="库存.xlsx",
+                output_file=str(output_file),
+                carton_factor_file=str(data_dir / "sku装箱数.xlsx"),
+                brand_keywords=["品牌Y"],
+            )
             generate_report_for_system(config, config)
 
             detail = pd.read_excel(output_file, sheet_name="明细", header=1)
@@ -609,7 +636,8 @@ class CoreCalculationsTest(unittest.TestCase):
             data_dir.mkdir(parents=True, exist_ok=True)
             reports_dir.mkdir(parents=True, exist_ok=True)
 
-            pd.DataFrame(
+            write_excel(
+                pd.DataFrame(
                 {
                     "门店名称": ["物美B店"],
                     "商品编码": ["111111"],
@@ -619,8 +647,11 @@ class CoreCalculationsTest(unittest.TestCase):
                     "销售数量": [0],
                     "销售时间": ["2026-02-08"],
                 }
-            ).to_excel(system_dir / "销售202602.xlsx", index=False)
-            pd.DataFrame(
+                ),
+                system_dir / "销售202602.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
                 {
                     "门店名称": ["物美B店"],
                     "商品编码": ["222222"],
@@ -628,38 +659,32 @@ class CoreCalculationsTest(unittest.TestCase):
                     "当前库存": [9],
                     "库存日期": ["2026-02-09"],
                 }
-            ).to_excel(system_dir / "库存.xlsx", index=False)
-            pd.DataFrame(
+                ),
+                system_dir / "库存.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
                 {
                     "商品条码": ["6991111111111"],
                     "商品名称": ["无映射销售SKU"],
                     "装箱数（因子）": [6],
                 }
-            ).to_excel(data_dir / "sku装箱数.xlsx", index=False)
+                ),
+                data_dir / "sku装箱数.xlsx",
+            )
 
             output_file = reports_dir / "宁夏物美20260209库存预警.xlsx"
-            config = {
-                "run_mode": "single",
-                "system_id": "ningxia_wumei",
-                "display_name": "宁夏物美",
-                "raw_data_dir": str(root / "raw_data"),
-                "data_subdir": "宁夏物美",
-                "sales_files": ["销售202602.xlsx"],
-                "inventory_file": "库存.xlsx",
-                "output_file": str(output_file),
-                "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
-                "risk_days_high": 60,
-                "risk_days_low": 45,
-                "sales_window_full_months": 3,
-                "sales_window_include_mtd": True,
-                "sales_window_recent_days": 30,
-                "sales_date_dayfirst": False,
-                "sales_date_format": "",
-                "season_mode": False,
-                "fail_on_empty_window": False,
-                "strict_auto_scan": False,
-                "brand_keywords": ["品牌M"],
-            }
+            config = build_single_config(
+                system_id="ningxia_wumei",
+                display_name="宁夏物美",
+                raw_data_dir=str(root / "raw_data"),
+                data_subdir="宁夏物美",
+                sales_files=["销售202602.xlsx"],
+                inventory_file="库存.xlsx",
+                output_file=str(output_file),
+                carton_factor_file=str(data_dir / "sku装箱数.xlsx"),
+                brand_keywords=["品牌M"],
+            )
             generate_report_for_system(config, config)
 
             detail = pd.read_excel(output_file, sheet_name="明细", header=1)
@@ -682,7 +707,8 @@ class CoreCalculationsTest(unittest.TestCase):
             data_dir.mkdir(parents=True, exist_ok=True)
             reports_dir.mkdir(parents=True, exist_ok=True)
 
-            pd.DataFrame(
+            write_excel(
+                pd.DataFrame(
                 {
                     "门店名称": ["门店A", "门店A"],
                     "商品名称": ["SKU1", "SKU2"],
@@ -690,8 +716,11 @@ class CoreCalculationsTest(unittest.TestCase):
                     "销售数量": ["1,200", "bad"],
                     "销售时间": ["2026-02-08", "2026-02-08"],
                 }
-            ).to_excel(system_dir / "销售202602.xlsx", index=False)
-            pd.DataFrame(
+                ),
+                system_dir / "销售202602.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
                 {
                     "门店名称": ["门店A"],
                     "商品名称": ["SKU1"],
@@ -699,38 +728,32 @@ class CoreCalculationsTest(unittest.TestCase):
                     "库存数量": ["oops"],
                     "库存日期": ["2026-02-09"],
                 }
-            ).to_excel(system_dir / "库存.xlsx", index=False)
-            pd.DataFrame(
+                ),
+                system_dir / "库存.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
                 {
                     "商品条码": ["6901"],
                     "商品名称": ["SKU1"],
                     "装箱数（因子）": [6],
                 }
-            ).to_excel(data_dir / "sku装箱数.xlsx", index=False)
+                ),
+                data_dir / "sku装箱数.xlsx",
+            )
 
             output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
-            config = {
-                "run_mode": "single",
-                "system_id": "shaanxi_huarun",
-                "display_name": "陕西华润",
-                "raw_data_dir": str(root / "raw_data"),
-                "data_subdir": "陕西华润",
-                "sales_files": ["销售202602.xlsx"],
-                "inventory_file": "库存.xlsx",
-                "output_file": str(output_file),
-                "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
-                "risk_days_high": 60,
-                "risk_days_low": 45,
-                "sales_window_full_months": 3,
-                "sales_window_include_mtd": True,
-                "sales_window_recent_days": 30,
-                "sales_date_dayfirst": False,
-                "sales_date_format": "",
-                "season_mode": False,
-                "fail_on_empty_window": False,
-                "strict_auto_scan": False,
-                "brand_keywords": ["品牌X"],
-            }
+            config = build_single_config(
+                system_id="shaanxi_huarun",
+                display_name="陕西华润",
+                raw_data_dir=str(root / "raw_data"),
+                data_subdir="陕西华润",
+                sales_files=["销售202602.xlsx"],
+                inventory_file="库存.xlsx",
+                output_file=str(output_file),
+                carton_factor_file=str(data_dir / "sku装箱数.xlsx"),
+                brand_keywords=["品牌X"],
+            )
             generate_report_for_system(config, config)
 
             status = pd.read_excel(output_file, sheet_name="运行状态", header=1)

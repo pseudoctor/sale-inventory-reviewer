@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -57,6 +57,14 @@ def _attach_factor_and_case_count(
     return out[cols]
 
 
+def _build_item_columns(enable_province_column: bool, trailing_columns: List[str]) -> List[str]:
+    columns = ["门店名称", "品牌", "商品条码", "商品名称"]
+    if enable_province_column:
+        columns.append("省份")
+    columns.extend(trailing_columns)
+    return columns
+
+
 def build_report_frames(
     *,
     detail: pd.DataFrame,
@@ -92,10 +100,8 @@ def build_report_frames(
         }
     )
     detail_out["商品条码"] = detail_out["商品条码"].apply(lambda x: core_io.normalize_barcode_value(x) or "")
-    detail_output_columns = ["门店名称", "品牌", "商品条码", "商品名称"]
-    if enable_province_column:
-        detail_output_columns.append("省份")
-    detail_output_columns.extend(
+    detail_output_columns = _build_item_columns(
+        enable_province_column,
         [
             "近三月+本月迄今平均日销",
             "近30天平均日销售",
@@ -111,7 +117,7 @@ def build_report_frames(
             "品牌来源规则",
             "同键名称数",
             "同键品牌数",
-        ]
+        ],
     )
     detail_out = detail_out[detail_output_columns]
 
@@ -220,31 +226,31 @@ def build_report_frames(
     )
     missing_sku_out = missing_sku_out.drop(columns=["建议补货数量_fallback"])
 
-    missing_output_columns = ["门店名称", "品牌", "商品条码", "商品名称"]
-    if enable_province_column:
-        missing_output_columns.append("省份")
-    missing_output_columns.extend(["近三月+本月迄今平均日销", "近30天平均日销售", "建议补货数量"])
+    missing_output_columns = _build_item_columns(
+        enable_province_column,
+        ["近三月+本月迄今平均日销", "近30天平均日销售", "建议补货数量"],
+    )
     missing_sku_out = missing_sku_out[missing_output_columns]
 
     out_of_stock_out = detail_out[detail_out["缺货"] == "是"].copy()
-    out_of_stock_columns = ["门店名称", "品牌", "商品条码", "商品名称"]
-    if enable_province_column:
-        out_of_stock_columns.append("省份")
-    out_of_stock_columns.extend(["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "缺货", "风险等级", "建议补货数量"])
+    out_of_stock_columns = _build_item_columns(
+        enable_province_column,
+        ["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "缺货", "风险等级", "建议补货数量"],
+    )
     out_of_stock_out = out_of_stock_out[out_of_stock_columns]
 
     replenish_out = detail_out[detail_out["建议补货数量"] > 0].copy()
-    replenish_output_columns = ["门店名称", "品牌", "商品条码", "商品名称"]
-    if enable_province_column:
-        replenish_output_columns.append("省份")
-    replenish_output_columns.extend(["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "缺货", "风险等级", "建议补货数量"])
+    replenish_output_columns = _build_item_columns(
+        enable_province_column,
+        ["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "缺货", "风险等级", "建议补货数量"],
+    )
     replenish_out = replenish_out[replenish_output_columns]
 
     transfer_out = detail_out[detail_out["建议调出数量"] > 0].copy()
-    transfer_output_columns = ["门店名称", "品牌", "商品条码", "商品名称"]
-    if enable_province_column:
-        transfer_output_columns.append("省份")
-    transfer_output_columns.extend(["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "风险等级", "建议调出数量"])
+    transfer_output_columns = _build_item_columns(
+        enable_province_column,
+        ["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "风险等级", "建议调出数量"],
+    )
     transfer_out = transfer_out[transfer_output_columns]
 
     factor_by_barcode = (

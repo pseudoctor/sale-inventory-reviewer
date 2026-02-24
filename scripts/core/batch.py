@@ -6,6 +6,87 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
+SUMMARY_COLUMNS = [
+    "system_id",
+    "display_name",
+    "enabled",
+    "data_subdir",
+    "status",
+    "message",
+    "error_stage",
+    "output_file",
+    "duration_sec",
+    "generated_at",
+    "input_files_count",
+    "loaded_sales_files",
+    "missing_sales_files",
+    "inventory_file_exists",
+    "detail_rows",
+    "missing_sku_rows",
+]
+
+
+def _default_metrics() -> Dict[str, Any]:
+    return {
+        "input_files_count": 0,
+        "loaded_sales_files": 0,
+        "missing_sales_files": 0,
+        "inventory_file_exists": False,
+        "detail_rows": 0,
+        "missing_sku_rows": 0,
+    }
+
+
+def _make_status_record(
+    *,
+    system_id: str,
+    display_name: str,
+    status: str,
+    message: str,
+    output_file: str,
+    error_stage: str = "",
+) -> Dict[str, Any]:
+    return {
+        "system_id": system_id,
+        "display_name": display_name,
+        "status": status,
+        "message": message,
+        "error_stage": error_stage,
+        "output_file": output_file,
+        **_default_metrics(),
+    }
+
+
+def _stamp_runtime_fields(record: Dict[str, Any], start_time: datetime, duration_sec: Optional[float] = None) -> None:
+    record["duration_sec"] = duration_sec if duration_sec is not None else round((datetime.now() - start_time).total_seconds(), 3)
+    record["generated_at"] = datetime.now().isoformat(timespec="seconds")
+
+
+def _finalize_record(
+    record: Dict[str, Any],
+    *,
+    start_time: datetime,
+    enabled: bool,
+    data_subdir: str,
+    system_id: str,
+    display_name: str,
+    output_file: str,
+    duration_sec: Optional[float] = None,
+) -> Dict[str, Any]:
+    base_record = {
+        "system_id": system_id,
+        "display_name": display_name,
+        "status": "UNKNOWN",
+        "message": "",
+        "error_stage": "",
+        "output_file": output_file,
+    }
+    finalized = {**base_record, **_default_metrics(), **record}
+    finalized["enabled"] = enabled
+    finalized["data_subdir"] = data_subdir
+    _stamp_runtime_fields(finalized, start_time, duration_sec=duration_sec)
+    return finalized
+
 
 def run_batch(
     global_config: Dict[str, Any],
@@ -44,50 +125,48 @@ def run_batch(
             preflight_error = exc
 
         if not enabled:
+            record = _make_status_record(
+                system_id=system_id,
+                display_name=display_name,
+                status="SKIPPED",
+                message="disabled",
+                output_file=expected_output_file,
+            )
             records.append(
-                {
-                    "system_id": system_id,
-                    "display_name": display_name,
-                    "enabled": False,
-                    "data_subdir": data_subdir,
-                    "status": "SKIPPED",
-                    "message": "disabled",
-                    "error_stage": "",
-                    "output_file": expected_output_file,
-                    "duration_sec": 0.0,
-                    "generated_at": datetime.now().isoformat(timespec="seconds"),
-                    "input_files_count": 0,
-                    "loaded_sales_files": 0,
-                    "missing_sales_files": 0,
-                    "inventory_file_exists": False,
-                    "detail_rows": 0,
-                    "missing_sku_rows": 0,
-                }
+                _finalize_record(
+                    record,
+                    start_time=start_time,
+                    enabled=False,
+                    data_subdir=data_subdir,
+                    system_id=system_id,
+                    display_name=display_name,
+                    output_file=expected_output_file,
+                    duration_sec=0.0,
+                )
             )
             print(f"[{display_name}] Skipped: disabled")
             continue
 
         if preflight_error is not None:
             failure_count += 1
+            record = _make_status_record(
+                system_id=system_id,
+                display_name=display_name,
+                status="FAILED",
+                message=str(preflight_error),
+                output_file=expected_output_file,
+                error_stage="config",
+            )
             records.append(
-                {
-                    "system_id": system_id,
-                    "display_name": display_name,
-                    "enabled": True,
-                    "data_subdir": data_subdir,
-                    "status": "FAILED",
-                    "message": str(preflight_error),
-                    "error_stage": "config",
-                    "output_file": expected_output_file,
-                    "duration_sec": round((datetime.now() - start_time).total_seconds(), 3),
-                    "generated_at": datetime.now().isoformat(timespec="seconds"),
-                    "input_files_count": 0,
-                    "loaded_sales_files": 0,
-                    "missing_sales_files": 0,
-                    "inventory_file_exists": False,
-                    "detail_rows": 0,
-                    "missing_sku_rows": 0,
-                }
+                _finalize_record(
+                    record,
+                    start_time=start_time,
+                    enabled=True,
+                    data_subdir=data_subdir,
+                    system_id=system_id,
+                    display_name=display_name,
+                    output_file=expected_output_file,
+                )
             )
             print(f"[{display_name}] Failed during config preflight: {preflight_error}")
             if not continue_on_error:
@@ -104,56 +183,42 @@ def run_batch(
             if message.startswith("[") and "] " in message:
                 error_stage = message[1:].split("]", 1)[0]
                 message = message.split("] ", 1)[1]
-            record = {
-                "system_id": system_id,
-                "display_name": display_name,
-                "enabled": True,
-                "data_subdir": data_subdir,
-                "status": "FAILED",
-                "message": message,
-                "error_stage": error_stage,
-                "output_file": expected_output_file,
-                "input_files_count": 0,
-                "loaded_sales_files": 0,
-                "missing_sales_files": 0,
-                "inventory_file_exists": False,
-                "detail_rows": 0,
-                "missing_sku_rows": 0,
-            }
+            record = _make_status_record(
+                system_id=system_id,
+                display_name=display_name,
+                status="FAILED",
+                message=message,
+                output_file=expected_output_file,
+                error_stage=error_stage,
+            )
             print(f"[{display_name}] Failed: {message}")
             if not continue_on_error:
-                record["duration_sec"] = round((datetime.now() - start_time).total_seconds(), 3)
-                record["generated_at"] = datetime.now().isoformat(timespec="seconds")
-                records.append(record)
+                records.append(
+                    _finalize_record(
+                        record,
+                        start_time=start_time,
+                        enabled=True,
+                        data_subdir=data_subdir,
+                        system_id=system_id,
+                        display_name=display_name,
+                        output_file=expected_output_file,
+                    )
+                )
                 break
 
-        record["enabled"] = True
-        record["data_subdir"] = data_subdir
-        record["duration_sec"] = round((datetime.now() - start_time).total_seconds(), 3)
-        record["generated_at"] = datetime.now().isoformat(timespec="seconds")
-        records.append(record)
+        records.append(
+            _finalize_record(
+                record,
+                start_time=start_time,
+                enabled=True,
+                data_subdir=data_subdir,
+                system_id=system_id,
+                display_name=display_name,
+                output_file=expected_output_file,
+            )
+        )
 
-    summary_df = pd.DataFrame(
-        records,
-        columns=[
-            "system_id",
-            "display_name",
-            "enabled",
-            "data_subdir",
-            "status",
-            "message",
-            "error_stage",
-            "output_file",
-            "duration_sec",
-            "generated_at",
-            "input_files_count",
-            "loaded_sales_files",
-            "missing_sales_files",
-            "inventory_file_exists",
-            "detail_rows",
-            "missing_sku_rows",
-        ],
-    )
+    summary_df = pd.DataFrame(records, columns=SUMMARY_COLUMNS)
     summary_df.to_excel(summary_output_file, index=False)
     print(f"Batch summary saved: {summary_output_file}")
     return failure_count

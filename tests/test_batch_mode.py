@@ -15,6 +15,7 @@ from scripts.generate_inventory_risk_report import (
     validate_config,
 )
 from scripts.core import config as core_config
+from tests.helpers import build_batch_config
 
 
 class BatchModeTest(unittest.TestCase):
@@ -317,48 +318,31 @@ class BatchModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             summary_path = Path(tmp) / "batch_run_summary.xlsx"
             cfg = validate_config(
-                {
-                    "run_mode": "batch",
-                    "raw_data_dir": "./raw_data",
-                    "output_file": "./reports/inventory_risk_report.xlsx",
-                    "sales_files": [],
-                    "inventory_file": "",
-                    "risk_days_high": 60,
-                    "risk_days_low": 45,
-                    "sales_window_full_months": 3,
-                    "sales_window_include_mtd": True,
-                    "sales_window_recent_days": 30,
-                    "sales_date_dayfirst": False,
-                    "sales_date_format": "",
-                    "season_mode": False,
-                    "fail_on_empty_window": False,
-                    "carton_factor_file": "./data/carton.xlsx",
-                    "brand_keywords": [],
-                    "batch": {
-                        "continue_on_error": True,
-                        "summary_output_file": str(summary_path),
-                        "systems": [
-                            {
-                                "system_id": "bad",
-                                "display_name": "坏系统",
-                                "enabled": True,
-                                "data_subdir": "坏系统",
-                                "sales_files": ["a.xlsx"],
-                                "inventory_file": "a_inv.xlsx",
-                                "output_file": "./reports/a.xlsx",
-                            },
-                            {
-                                "system_id": "ok",
-                                "display_name": "好系统",
-                                "enabled": True,
-                                "data_subdir": "好系统",
-                                "sales_files": ["b.xlsx"],
-                                "inventory_file": "b_inv.xlsx",
-                                "output_file": "./reports/b.xlsx",
-                            },
-                        ],
-                    },
-                }
+                build_batch_config(
+                    continue_on_error=True,
+                    summary_output_file=str(summary_path),
+                    carton_factor_file="./data/carton.xlsx",
+                    systems=[
+                        {
+                            "system_id": "bad",
+                            "display_name": "坏系统",
+                            "enabled": True,
+                            "data_subdir": "坏系统",
+                            "sales_files": ["a.xlsx"],
+                            "inventory_file": "a_inv.xlsx",
+                            "output_file": "./reports/a.xlsx",
+                        },
+                        {
+                            "system_id": "ok",
+                            "display_name": "好系统",
+                            "enabled": True,
+                            "data_subdir": "好系统",
+                            "sales_files": ["b.xlsx"],
+                            "inventory_file": "b_inv.xlsx",
+                            "output_file": "./reports/b.xlsx",
+                        },
+                    ],
+                )
             )
 
             def fake_generate(system_cfg, _):
@@ -395,38 +379,21 @@ class BatchModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             summary_path = Path(tmp) / "batch_run_summary.xlsx"
             cfg = validate_config(
-                {
-                    "run_mode": "batch",
-                    "raw_data_dir": "./raw_data",
-                    "output_file": "./reports/inventory_risk_report.xlsx",
-                    "sales_files": [],
-                    "inventory_file": "",
-                    "risk_days_high": 60,
-                    "risk_days_low": 45,
-                    "sales_window_full_months": 3,
-                    "sales_window_include_mtd": True,
-                    "sales_window_recent_days": 30,
-                    "sales_date_dayfirst": False,
-                    "sales_date_format": "",
-                    "season_mode": False,
-                    "fail_on_empty_window": False,
-                    "carton_factor_file": "./data/carton.xlsx",
-                    "brand_keywords": [],
-                    "batch": {
-                        "continue_on_error": True,
-                        "summary_output_file": str(summary_path),
-                        "systems": [
-                            {
-                                "display_name": "停用系统",
-                                "enabled": False,
-                                "data_subdir": "停用系统",
-                                "sales_files": ["a.xlsx"],
-                                "inventory_file": "a_inv.xlsx",
-                                "output_file": "./reports/a.xlsx",
-                            }
-                        ],
-                    },
-                }
+                build_batch_config(
+                    continue_on_error=True,
+                    summary_output_file=str(summary_path),
+                    carton_factor_file="./data/carton.xlsx",
+                    systems=[
+                        {
+                            "display_name": "停用系统",
+                            "enabled": False,
+                            "data_subdir": "停用系统",
+                            "sales_files": ["a.xlsx"],
+                            "inventory_file": "a_inv.xlsx",
+                            "output_file": "./reports/a.xlsx",
+                        }
+                    ],
+                )
             )
 
             with patch("scripts.generate_inventory_risk_report.generate_report_for_system") as mocked_generate:
@@ -446,48 +413,31 @@ class BatchModeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             summary_path = Path(tmp) / "batch_run_summary.xlsx"
             cfg = validate_config(
-                {
-                    "run_mode": "batch",
-                    "raw_data_dir": "./raw_data",
-                    "output_file": "./reports/inventory_risk_report.xlsx",
-                    "sales_files": [],
-                    "inventory_file": "",
-                    "risk_days_high": 60,
-                    "risk_days_low": 45,
-                    "sales_window_full_months": 3,
-                    "sales_window_include_mtd": True,
-                    "sales_window_recent_days": 30,
-                    "sales_date_dayfirst": False,
-                    "sales_date_format": "",
-                    "season_mode": False,
-                    "fail_on_empty_window": False,
-                    "carton_factor_file": "./data/carton.xlsx",
-                    "brand_keywords": [],
-                    "batch": {
-                        "continue_on_error": False,
-                        "summary_output_file": str(summary_path),
-                        "systems": [
-                            {
-                                "system_id": "bad",
-                                "display_name": "坏系统",
-                                "enabled": True,
-                                "data_subdir": "坏系统",
-                                "sales_files": ["a.xlsx"],
-                                "inventory_file": "a_inv.xlsx",
-                                "output_file": "./reports/a.xlsx",
-                            },
-                            {
-                                "system_id": "ok",
-                                "display_name": "好系统",
-                                "enabled": True,
-                                "data_subdir": "好系统",
-                                "sales_files": ["b.xlsx"],
-                                "inventory_file": "b_inv.xlsx",
-                                "output_file": "./reports/b.xlsx",
-                            },
-                        ],
-                    },
-                }
+                build_batch_config(
+                    continue_on_error=False,
+                    summary_output_file=str(summary_path),
+                    carton_factor_file="./data/carton.xlsx",
+                    systems=[
+                        {
+                            "system_id": "bad",
+                            "display_name": "坏系统",
+                            "enabled": True,
+                            "data_subdir": "坏系统",
+                            "sales_files": ["a.xlsx"],
+                            "inventory_file": "a_inv.xlsx",
+                            "output_file": "./reports/a.xlsx",
+                        },
+                        {
+                            "system_id": "ok",
+                            "display_name": "好系统",
+                            "enabled": True,
+                            "data_subdir": "好系统",
+                            "sales_files": ["b.xlsx"],
+                            "inventory_file": "b_inv.xlsx",
+                            "output_file": "./reports/b.xlsx",
+                        },
+                    ],
+                )
             )
 
             with patch(
