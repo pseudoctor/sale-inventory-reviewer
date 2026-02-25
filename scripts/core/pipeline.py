@@ -159,6 +159,11 @@ def _load_sales_data(
         raise RuntimeError("[input_read] No sales files were loaded.")
 
     sales_df = pd.concat(sales_data, ignore_index=True)
+    if sales_df.empty:
+        raise ValueError(
+            "No valid sales rows after parsing dates. "
+            "Please check sales date values and sales_date_format/sales_date_dayfirst settings."
+        )
     return sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows, invalid_sales_qty_rows
 
 
@@ -440,15 +445,16 @@ def generate_report_for_system(
                 "[input_read] strict_auto_scan=true and no valid sales files were detected."
                 f" Ignored candidates: {ignored_text}"
             )
-        raise FileNotFoundError(
-            f"No auto-detected sales files in {raw_data_dir}. "
-            "Expected filename with sales keyword and YYYYMM (e.g. 销售202602.xlsx)." + detail
+        raise RuntimeError(
+            "[input_read] No auto-detected sales files in "
+            f"{raw_data_dir}. Expected filename with sales keyword and YYYYMM "
+            f"(e.g. 销售202602.xlsx).{detail}"
         )
 
     inv_path = raw_data_dir / inventory_file
     inventory_file_exists = inv_path.exists()
     if not inv_path.exists():
-        raise FileNotFoundError(f"Inventory file not found: {inv_path}")
+        raise RuntimeError(f"[input_read] Inventory file not found: {inv_path}")
 
     try:
         inv_df, output_file, inventory_date_ts, inventory_date, invalid_inventory_qty_rows = _prepare_inventory_data(

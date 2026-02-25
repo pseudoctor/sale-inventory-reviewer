@@ -192,6 +192,78 @@ class BatchModeTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_batch_config(cfg)
 
+    def test_validate_batch_config_rejects_duplicate_sales_files_in_system(self):
+        cfg = validate_config(
+            {
+                "run_mode": "batch",
+                "raw_data_dir": "./raw_data",
+                "output_file": "./reports/inventory_risk_report.xlsx",
+                "sales_files": [],
+                "inventory_file": "",
+                "risk_days_high": 60,
+                "risk_days_low": 45,
+                "sales_window_full_months": 3,
+                "sales_window_include_mtd": True,
+                "sales_window_recent_days": 30,
+                "sales_date_dayfirst": False,
+                "sales_date_format": "",
+                "season_mode": False,
+                "fail_on_empty_window": False,
+                "carton_factor_file": "./data/sku装箱数.xlsx",
+                "brand_keywords": [],
+                "batch": {
+                    "continue_on_error": True,
+                    "summary_output_file": "./reports/batch_run_summary.xlsx",
+                    "systems": [
+                        {
+                            "system_id": "a1",
+                            "display_name": "系统A",
+                            "sales_files": ["a.xlsx", "a.xlsx"],
+                            "inventory_file": "inv_a.xlsx",
+                        }
+                    ],
+                },
+            }
+        )
+        with self.assertRaises(ValueError):
+            validate_batch_config(cfg)
+
+    def test_validate_batch_config_rejects_sales_files_parent_path(self):
+        cfg = validate_config(
+            {
+                "run_mode": "batch",
+                "raw_data_dir": "./raw_data",
+                "output_file": "./reports/inventory_risk_report.xlsx",
+                "sales_files": [],
+                "inventory_file": "",
+                "risk_days_high": 60,
+                "risk_days_low": 45,
+                "sales_window_full_months": 3,
+                "sales_window_include_mtd": True,
+                "sales_window_recent_days": 30,
+                "sales_date_dayfirst": False,
+                "sales_date_format": "",
+                "season_mode": False,
+                "fail_on_empty_window": False,
+                "carton_factor_file": "./data/sku装箱数.xlsx",
+                "brand_keywords": [],
+                "batch": {
+                    "continue_on_error": True,
+                    "summary_output_file": "./reports/batch_run_summary.xlsx",
+                    "systems": [
+                        {
+                            "system_id": "a1",
+                            "display_name": "系统A",
+                            "sales_files": ["../a.xlsx"],
+                            "inventory_file": "inv_a.xlsx",
+                        }
+                    ],
+                },
+            }
+        )
+        with self.assertRaises(ValueError):
+            validate_batch_config(cfg)
+
     def test_validate_batch_config_allows_disabled_system_without_files(self):
         cfg = core_config.validate_config(
             {

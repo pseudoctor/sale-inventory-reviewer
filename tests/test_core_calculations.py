@@ -11,6 +11,7 @@ from scripts.generate_inventory_risk_report import (
     classify_risk_levels,
     combine_daily_sales,
     compute_case_counts,
+    extract_month_key,
     generate_report_for_system,
     list_ignored_sales_files,
     map_province_by_supplier_card,
@@ -64,6 +65,42 @@ class CoreCalculationsTest(unittest.TestCase):
                     "sales_window_recent_days": 30,
                     "season_mode": False,
                     "strict_auto_scan": "yes",
+                    "brand_keywords": [],
+                }
+            )
+
+    def test_validate_config_rejects_duplicate_sales_files(self):
+        with self.assertRaises(ValueError):
+            validate_config(
+                {
+                    "raw_data_dir": "./raw_data",
+                    "output_file": "./reports/x.xlsx",
+                    "sales_files": ["sales_202601.xlsx", "sales_202601.xlsx"],
+                    "inventory_file": "库存.xlsx",
+                    "risk_days_high": 60,
+                    "risk_days_low": 45,
+                    "sales_window_full_months": 3,
+                    "sales_window_include_mtd": True,
+                    "sales_window_recent_days": 30,
+                    "season_mode": False,
+                    "brand_keywords": [],
+                }
+            )
+
+    def test_validate_config_rejects_sales_files_parent_path(self):
+        with self.assertRaises(ValueError):
+            validate_config(
+                {
+                    "raw_data_dir": "./raw_data",
+                    "output_file": "./reports/x.xlsx",
+                    "sales_files": ["../outside.xlsx"],
+                    "inventory_file": "库存.xlsx",
+                    "risk_days_high": 60,
+                    "risk_days_low": 45,
+                    "sales_window_full_months": 3,
+                    "sales_window_include_mtd": True,
+                    "sales_window_recent_days": 30,
+                    "season_mode": False,
                     "brand_keywords": [],
                 }
             )
@@ -195,7 +232,13 @@ class CoreCalculationsTest(unittest.TestCase):
             custom = root / "sales_custom_name.xlsx"
             custom.touch()
             out = resolve_sales_candidates(root, ["sales_custom_name.xlsx"])
-            self.assertEqual(out, [custom])
+            self.assertEqual([p.resolve() for p in out], [custom.resolve()])
+
+    def test_resolve_sales_candidates_rejects_configured_path_outside_raw_data_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(ValueError):
+                resolve_sales_candidates(root, ["../outside.xlsx"])
 
     def test_resolve_sales_candidates_autodetect_by_yyyymm(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -204,15 +247,21 @@ class CoreCalculationsTest(unittest.TestCase):
             jan = root / "销售202601.xlsx"
             dec = root / "销售202512.xlsx"
             feb_xls = root / "销售202602.xls"
+            invalid_month = root / "销售202613.xlsx"
             bad = root / "sales.xlsx"
             inv = root / "库存202602.xlsx"
             jan.touch()
             dec.touch()
             feb_xls.touch()
+            invalid_month.touch()
             bad.touch()
             inv.touch()
             out = resolve_sales_candidates(root, [])
             self.assertEqual(out, [dec, jan, feb_xls])
+
+    def test_extract_month_key_rejects_invalid_month(self):
+        self.assertEqual(extract_month_key("销售202612.xlsx"), 202612)
+        self.assertIsNone(extract_month_key("销售202613.xlsx"))
 
     def test_list_ignored_sales_files_reports_non_sales_and_inventory_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -360,6 +409,18 @@ class CoreCalculationsTest(unittest.TestCase):
         )
         out = core_io.ensure_inventory_brand_column(df, ["伊利", "蒙牛"])
         self.assertEqual(out["品牌"].tolist(), ["伊利", "蒙牛", "其他"])
+
+    def test_ensure_inventory_brand_column_supports_product_alias(self):
+        df = pd.DataFrame(
+            {
+                "门店名称": ["A店"],
+                "商品": ["伊利高钙奶"],
+                "品牌": [""],
+                "库存数量": [1],
+            }
+        )
+        out = core_io.ensure_inventory_brand_column(df, ["伊利", "蒙牛"])
+        self.assertEqual(out["品牌"].tolist(), ["伊利"])
 
     def test_ensure_sales_brand_column_adds_brand_when_column_missing(self):
         df = pd.DataFrame(
@@ -696,6 +757,118 @@ class CoreCalculationsTest(unittest.TestCase):
             status_map = dict(zip(status["状态项"], status["值"]))
             self.assertEqual(int(status_map["物美条码映射命中行数"]), 0)
             self.assertEqual(int(status_map["物美条码映射回退行数"]), 1)
+
+    def test_generate_report_fails_with_clear_message_when_all_sales_dates_invalid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            system_dir = root / "raw_data" / "测试系统"
+            data_dir = root / "data"
+            reports_dir = root / "reports"
+            system_dir.mkdir(parents=True, exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            reports_dir.mkdir(parents=True, exist_ok=True)
+
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "门店名称": ["测试店"],
+                        "商品名称": ["测试SKU"],
+                        "商品条码": ["6900000000001"],
+                        "销售数量": [5],
+                        "销售时间": ["not-a-date"],
+                    }
+                ),
+                system_dir / "销售202602.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "门店名称": ["测试店"],
+                        "商品名称": ["测试SKU"],
+                        "商品条码": ["6900000000001"],
+                        "当前库存": [10],
+                        "库存日期": ["2026-02-10"],
+                    }
+                ),
+                system_dir / "库存.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "商品条码": ["6900000000001"],
+                        "商品名称": ["测试SKU"],
+                        "装箱数（因子）": [6],
+                    }
+                ),
+                data_dir / "sku装箱数.xlsx",
+            )
+
+            config = build_single_config(
+                system_id="demo",
+                display_name="测试系统",
+                raw_data_dir=str(root / "raw_data"),
+                data_subdir="测试系统",
+                sales_files=["销售202602.xlsx"],
+                inventory_file="库存.xlsx",
+                output_file=str(reports_dir / "测试系统20260210库存预警.xlsx"),
+                carton_factor_file=str(data_dir / "sku装箱数.xlsx"),
+                brand_keywords=["测试"],
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                generate_report_for_system(config, config)
+            self.assertIn("[normalize]", str(ctx.exception))
+            self.assertIn("No valid sales rows after parsing dates", str(ctx.exception))
+
+    def test_generate_report_marks_missing_inventory_as_input_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            system_dir = root / "raw_data" / "测试系统"
+            data_dir = root / "data"
+            reports_dir = root / "reports"
+            system_dir.mkdir(parents=True, exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            reports_dir.mkdir(parents=True, exist_ok=True)
+
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "门店名称": ["测试店"],
+                        "商品名称": ["测试SKU"],
+                        "商品条码": ["6900000000001"],
+                        "销售数量": [5],
+                        "销售时间": ["2026-02-10"],
+                    }
+                ),
+                system_dir / "销售202602.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "商品条码": ["6900000000001"],
+                        "商品名称": ["测试SKU"],
+                        "装箱数（因子）": [6],
+                    }
+                ),
+                data_dir / "sku装箱数.xlsx",
+            )
+
+            config = build_single_config(
+                system_id="demo",
+                display_name="测试系统",
+                raw_data_dir=str(root / "raw_data"),
+                data_subdir="测试系统",
+                sales_files=["销售202602.xlsx"],
+                inventory_file="缺失库存.xlsx",
+                output_file=str(reports_dir / "测试系统20260210库存预警.xlsx"),
+                carton_factor_file=str(data_dir / "sku装箱数.xlsx"),
+                brand_keywords=["测试"],
+            )
+
+            with self.assertRaises(RuntimeError) as ctx:
+                generate_report_for_system(config, config)
+            self.assertIn("[input_read]", str(ctx.exception))
+            self.assertIn("Inventory file not found", str(ctx.exception))
 
     def test_status_reports_invalid_numeric_rows(self):
         with tempfile.TemporaryDirectory() as tmp:

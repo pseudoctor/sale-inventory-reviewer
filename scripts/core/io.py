@@ -13,7 +13,11 @@ def extract_month_key(filename: str) -> Optional[int]:
     match = re.search(r"(\d{4})(\d{2})", filename)
     if not match:
         return None
-    return int(match.group(1) + match.group(2))
+    year = int(match.group(1))
+    month = int(match.group(2))
+    if month < 1 or month > 12:
+        return None
+    return year * 100 + month
 
 
 def find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
@@ -35,7 +39,18 @@ def resolve_sales_candidates(raw_data_dir: Path, configured_sales_files: List[st
     if not raw_data_dir.exists() or not raw_data_dir.is_dir():
         raise FileNotFoundError(f"Sales data directory not found: {raw_data_dir}")
     if configured_sales_files:
-        return [raw_data_dir / name for name in configured_sales_files]
+        base_dir = raw_data_dir.resolve()
+        resolved_paths: List[Path] = []
+        for name in configured_sales_files:
+            candidate = (base_dir / name).resolve()
+            try:
+                candidate.relative_to(base_dir)
+            except ValueError as exc:
+                raise ValueError(
+                    f"Configured sales file escapes raw_data_dir: {name} (raw_data_dir={raw_data_dir})"
+                ) from exc
+            resolved_paths.append(candidate)
+        return resolved_paths
 
     candidates: List[Tuple[int, Path]] = []
     for path in raw_data_dir.iterdir():
@@ -332,12 +347,15 @@ def fill_brand_from_product(
 def ensure_inventory_brand_column(df: pd.DataFrame, brands: List[str]) -> pd.DataFrame:
     df = df.copy()
     df.columns = df.columns.str.strip()
+    product_col = find_column(df.columns.tolist(), ["商品名称", "商品", "product"])
+    if product_col is None:
+        raise ValueError("Missing 商品名称/商品/product; cannot derive 品牌 column.")
     return fill_brand_from_product(
         df,
-        product_col="商品名称",
+        product_col=product_col,
         brands=brands,
         brand_col="品牌",
-        insert_before_col="商品名称",
+        insert_before_col=product_col,
     )
 
 

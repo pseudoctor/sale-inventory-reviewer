@@ -49,6 +49,23 @@ def _validate_bool_field(config: Dict[str, Any], key: str, default: bool, error_
     return value
 
 
+def _normalize_sales_file_entries(entries: list[str], field_name: str) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in entries:
+        value = raw.strip()
+        path = Path(value)
+        if path.is_absolute() or ".." in path.parts:
+            raise ValueError(
+                f"{field_name} entries must stay within raw_data_dir using relative paths only (no absolute path or '..'): {raw}"
+            )
+        if value in seen:
+            raise ValueError(f"{field_name} contains duplicated entry: {value}")
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     run_mode = str(config.get("run_mode", "single")).strip().lower()
     if run_mode not in {"single", "batch"}:
@@ -83,6 +100,7 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("config.sales_files must be a list.")
     if not all(isinstance(x, str) and x.strip() for x in sales_files):
         raise ValueError("config.sales_files entries must be non-empty strings.")
+    config["sales_files"] = _normalize_sales_file_entries(sales_files, "config.sales_files")
 
     risk_days_high = float(config.get("risk_days_high", 60))
     risk_days_low = float(config.get("risk_days_low", 45))
@@ -183,6 +201,10 @@ def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
             raise ValueError(f"batch.systems[{idx}].sales_files must be a non-empty list.")
         if not all(isinstance(x, str) and x.strip() for x in sales_files):
             raise ValueError(f"batch.systems[{idx}].sales_files entries must be non-empty strings.")
+        system["sales_files"] = _normalize_sales_file_entries(
+            sales_files,
+            f"batch.systems[{idx}].sales_files",
+        )
 
         inv_file = system.get("inventory_file")
         if not isinstance(inv_file, str) or not inv_file.strip():

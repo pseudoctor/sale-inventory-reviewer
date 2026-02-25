@@ -34,7 +34,7 @@ def _check_python() -> list[str]:
 
 def _check_dependencies() -> list[str]:
     errors: list[str] = []
-    for pkg in ("pandas", "openpyxl", "yaml", "xlrd"):
+    for pkg in ("pandas", "openpyxl", "yaml"):
         try:
             module = importlib.import_module(pkg)
             if pkg == "yaml":
@@ -48,6 +48,31 @@ def _check_dependencies() -> list[str]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"missing dependency '{pkg}': {exc}")
     return errors
+
+
+def _needs_xls_support(config: dict, raw_data_dir: Path) -> bool:
+    def _is_xls_file(name: object) -> bool:
+        return isinstance(name, str) and name.strip().lower().endswith(".xls")
+
+    if _is_xls_file(config.get("inventory_file")) or _is_xls_file(config.get("carton_factor_file")):
+        return True
+    if any(_is_xls_file(name) for name in config.get("sales_files", [])):
+        return True
+
+    run_mode = str(config.get("run_mode", "single")).lower()
+    if run_mode == "batch":
+        for system in config.get("batch", {}).get("systems", []):
+            if not bool(system.get("enabled", True)):
+                continue
+            if _is_xls_file(system.get("inventory_file")) or _is_xls_file(system.get("carton_factor_file")):
+                return True
+            if any(_is_xls_file(name) for name in system.get("sales_files", [])):
+                return True
+    elif not config.get("sales_files"):
+        for path in raw_data_dir.iterdir():
+            if path.is_file() and path.suffix.lower() == ".xls":
+                return True
+    return False
 
 
 def _check_config_and_paths() -> list[str]:
@@ -71,6 +96,16 @@ def _check_config_and_paths() -> list[str]:
         raw_data_dir = (BASE_DIR / raw_data_dir).resolve()
     if not raw_data_dir.exists():
         errors.append(f"raw_data_dir not found: {raw_data_dir}")
+        return errors
+    if not raw_data_dir.is_dir():
+        errors.append(f"raw_data_dir is not a directory: {raw_data_dir}")
+        return errors
+
+    if _needs_xls_support(config, raw_data_dir):
+        try:
+            importlib.import_module("xlrd")
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"missing dependency 'xlrd': {exc} (required for .xls inputs)")
 
     configured_brand_keywords = [str(x).strip() for x in (config.get("brand_keywords") or []) if str(x).strip()]
     if not configured_brand_keywords:
