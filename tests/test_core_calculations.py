@@ -169,12 +169,14 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(str(parsed.iloc[0].date()), "2026-02-01")
 
     def test_compute_case_counts_peak_and_offpeak(self):
-        qty = pd.Series([13, 7, 0])
-        factor = pd.Series([6, 4, 5])
+        qty = pd.Series([13, 7, 1, 0, 2])
+        factor = pd.Series([6, 4, 6, 5, 0])
         peak = compute_case_counts(qty, factor, use_peak_mode=True)
         off_peak = compute_case_counts(qty, factor, use_peak_mode=False)
-        self.assertEqual(peak.tolist(), [3, 2, 0])
-        self.assertEqual(off_peak.tolist(), [2, 1, 0])
+        self.assertEqual(peak.tolist()[:4], [3, 2, 1, 0])
+        self.assertEqual(off_peak.tolist()[:4], [2, 1, 1, 0])
+        self.assertTrue(pd.isna(peak.iloc[4]))
+        self.assertTrue(pd.isna(off_peak.iloc[4]))
 
     def test_map_province_by_supplier_card(self):
         self.assertEqual(map_province_by_supplier_card("153085"), "宁夏")
@@ -511,6 +513,91 @@ class CoreCalculationsTest(unittest.TestCase):
 
         self.assertEqual(float(frames["门店汇总"]["预测平均日销(季节模式后)"].iloc[0]), 1.235)
         self.assertEqual(float(frames["品牌汇总"]["预测平均日销(季节模式后)"].iloc[0]), 2.346)
+
+    def test_replenish_case_count_uses_min_one_case_rule_in_off_peak(self):
+        detail = pd.DataFrame(
+            {
+                "store": ["A店"],
+                "brand": ["品牌A"],
+                "barcode_output": ["6900000000001"],
+                "product": ["SKU1"],
+                "province": ["其他/未知"],
+                "daily_sales_3m_mtd": [0.1],
+                "daily_sales_30d": [0.1],
+                "inventory_qty": [0],
+                "out_of_stock": ["是"],
+                "risk_level": ["低"],
+                "inventory_sales_ratio": [0.0],
+                "turnover_rate": [0.0],
+                "turnover_days": [0.0],
+                "suggest_outbound_qty": [0],
+                "suggest_replenish_qty": [1],
+                "name_source_rule": ["latest_sales_name"],
+                "brand_source_rule": ["latest_sales_brand"],
+                "name_conflict_count": [1],
+                "brand_conflict_count": [1],
+            }
+        )
+        missing_sales = pd.DataFrame(
+            columns=[
+                "store",
+                "brand",
+                "display_barcode",
+                "barcode",
+                "product",
+                "province",
+                "daily_sales_3m_mtd",
+                "daily_sales_30d",
+            ]
+        )
+        store_summary = pd.DataFrame(
+            {
+                "store": ["A店"],
+                "daily_sales_3m_mtd": [0.1],
+                "daily_sales_30d": [0.1],
+                "forecast_daily_sales": [0.1],
+                "inventory_qty": [0],
+                "risk_level": ["低"],
+                "inventory_sales_ratio": [0.0],
+                "turnover_rate": [0.0],
+                "turnover_days": [0.0],
+            }
+        )
+        brand_summary = pd.DataFrame(
+            {
+                "brand": ["品牌A"],
+                "daily_sales_3m_mtd": [0.1],
+                "daily_sales_30d": [0.1],
+                "forecast_daily_sales": [0.1],
+                "inventory_qty": [0],
+                "risk_level": ["低"],
+                "inventory_sales_ratio": [0.0],
+                "turnover_rate": [0.0],
+                "turnover_days": [0.0],
+            }
+        )
+        carton_factor_df = pd.DataFrame(
+            {
+                "商品条码": ["6900000000001"],
+                "商品名称": ["SKU1"],
+                "装箱数（因子）": [6],
+            }
+        )
+
+        frames = core_output_tables.build_report_frames(
+            detail=detail,
+            missing_sales=missing_sales,
+            store_summary=store_summary,
+            brand_summary=brand_summary,
+            carton_factor_df=carton_factor_df,
+            is_wumei_system=False,
+            enable_province_column=False,
+            use_peak_mode=False,
+        )
+
+        replenish = frames["建议补货清单"]
+        self.assertEqual(replenish.iloc[0]["建议补货数量"], 1)
+        self.assertEqual(replenish.iloc[0]["建议补货箱数"], "1件")
 
     def test_matching_uses_store_barcode_key_and_latest_name_brand(self):
         sales_df = pd.DataFrame(

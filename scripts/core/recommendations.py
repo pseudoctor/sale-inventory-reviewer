@@ -10,6 +10,8 @@ def compute_case_counts(qty: pd.Series, factor: pd.Series, use_peak_mode: bool) 
     valid_factor = factor_num > 0
     raw_cases = np.where(valid_factor, qty_num / factor_num, np.nan)
     rounded = np.where(valid_factor, np.ceil(raw_cases) if use_peak_mode else np.floor(raw_cases), np.nan)
+    min_one_case_mask = valid_factor & (qty_num > 0) & (raw_cases < 1)
+    rounded = np.where(min_one_case_mask, 1, rounded)
     return pd.Series(rounded, index=qty.index).astype("Int64")
 
 
