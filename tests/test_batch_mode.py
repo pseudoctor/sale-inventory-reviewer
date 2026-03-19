@@ -5,16 +5,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from scripts.generate_inventory_risk_report import (
-    build_system_config,
-    resolve_output_file_path,
-    resolve_expected_output_for_status,
-    resolve_system_raw_data_dir,
-    run_batch,
-    validate_batch_config,
-    validate_config,
-)
 from scripts.core import config as core_config
+from scripts.generate_inventory_risk_report import run_batch
 from tests.helpers import build_batch_config
 
 
@@ -39,7 +31,7 @@ class BatchModeTest(unittest.TestCase):
             "brand_keywords": [],
             "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
         }
-        out = validate_config(cfg)
+        out = core_config.validate_config(cfg)
         self.assertEqual(out["output_file"], "")
 
     def test_validate_config_single_backward_compatible(self):
@@ -61,11 +53,11 @@ class BatchModeTest(unittest.TestCase):
             "brand_keywords": [],
             "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
         }
-        out = validate_config(cfg)
+        out = core_config.validate_config(cfg)
         self.assertEqual(out["run_mode"], "single")
 
     def test_validate_batch_config_rejects_duplicate_system_id(self):
-        cfg = validate_config(
+        cfg = core_config.validate_config(
             {
                 "run_mode": "batch",
                 "raw_data_dir": "./raw_data",
@@ -104,10 +96,10 @@ class BatchModeTest(unittest.TestCase):
             }
         )
         with self.assertRaises(ValueError):
-            validate_batch_config(cfg)
+            core_config.validate_batch_config(cfg, Path("."))
 
     def test_validate_batch_config_rejects_duplicate_display_name(self):
-        cfg = validate_config(
+        cfg = core_config.validate_config(
             {
                 "run_mode": "batch",
                 "raw_data_dir": "./raw_data",
@@ -146,10 +138,10 @@ class BatchModeTest(unittest.TestCase):
             }
         )
         with self.assertRaises(ValueError):
-            validate_batch_config(cfg)
+            core_config.validate_batch_config(cfg, Path("."))
 
     def test_validate_batch_config_rejects_duplicate_explicit_output_file(self):
-        cfg = validate_config(
+        cfg = core_config.validate_config(
             {
                 "run_mode": "batch",
                 "raw_data_dir": "./raw_data",
@@ -190,10 +182,10 @@ class BatchModeTest(unittest.TestCase):
             }
         )
         with self.assertRaises(ValueError):
-            validate_batch_config(cfg)
+            core_config.validate_batch_config(cfg, Path("."))
 
     def test_validate_batch_config_rejects_duplicate_sales_files_in_system(self):
-        cfg = validate_config(
+        cfg = core_config.validate_config(
             {
                 "run_mode": "batch",
                 "raw_data_dir": "./raw_data",
@@ -226,10 +218,10 @@ class BatchModeTest(unittest.TestCase):
             }
         )
         with self.assertRaises(ValueError):
-            validate_batch_config(cfg)
+            core_config.validate_batch_config(cfg, Path("."))
 
     def test_validate_batch_config_rejects_sales_files_parent_path(self):
-        cfg = validate_config(
+        cfg = core_config.validate_config(
             {
                 "run_mode": "batch",
                 "raw_data_dir": "./raw_data",
@@ -262,7 +254,7 @@ class BatchModeTest(unittest.TestCase):
             }
         )
         with self.assertRaises(ValueError):
-            validate_batch_config(cfg)
+            core_config.validate_batch_config(cfg, Path("."))
 
     def test_validate_batch_config_allows_disabled_system_without_files(self):
         cfg = core_config.validate_config(
@@ -295,7 +287,7 @@ class BatchModeTest(unittest.TestCase):
         core_config.validate_batch_config(cfg, Path.cwd())
 
     def test_build_system_config_uses_default_output_and_carton(self):
-        global_cfg = validate_config(
+        global_cfg = core_config.validate_config(
             {
                 "run_mode": "batch",
                 "raw_data_dir": "./raw_data",
@@ -322,7 +314,7 @@ class BatchModeTest(unittest.TestCase):
             "inventory_file": "inv.xlsx",
             "data_subdir": "系统一",
         }
-        merged = build_system_config(system_cfg, global_cfg)
+        merged = core_config.build_system_config(system_cfg, global_cfg)
         self.assertEqual(merged["output_file"], "")
         self.assertEqual(merged["carton_factor_file"], "./data/global_carton.xlsx")
         self.assertEqual(merged["system_id"], "系统一")
@@ -330,7 +322,7 @@ class BatchModeTest(unittest.TestCase):
         self.assertIsNone(merged.get("province_column_enabled"))
 
     def test_build_system_config_allows_province_column_override(self):
-        global_cfg = validate_config(
+        global_cfg = core_config.validate_config(
             {
                 "run_mode": "batch",
                 "raw_data_dir": "./raw_data",
@@ -358,38 +350,38 @@ class BatchModeTest(unittest.TestCase):
             "inventory_file": "inv.xlsx",
             "province_column_enabled": True,
         }
-        merged = build_system_config(system_cfg, global_cfg)
+        merged = core_config.build_system_config(system_cfg, global_cfg)
         self.assertTrue(merged["province_column_enabled"])
 
     def test_resolve_system_raw_data_dir_with_subdir(self):
         cfg = {"raw_data_dir": "./raw_data", "data_subdir": "宁夏物美"}
-        path = resolve_system_raw_data_dir(cfg)
+        path = core_config.resolve_system_raw_data_dir(cfg, Path.cwd())
         self.assertTrue(str(path).endswith("raw_data/宁夏物美"))
 
     def test_resolve_system_raw_data_dir_raises_for_missing_subdir(self):
         cfg = {"raw_data_dir": "./raw_data", "data_subdir": "不存在的系统目录"}
         with self.assertRaises(FileNotFoundError):
-            resolve_system_raw_data_dir(cfg)
+            core_config.resolve_system_raw_data_dir(cfg, Path.cwd())
 
     def test_resolve_output_file_path_respects_explicit_output(self):
         cfg = {"output_file": "./reports/陕西华润_inventory_risk_report.xlsx"}
-        out = resolve_output_file_path(cfg, "陕西华润", "2026-02-08")
+        out = core_config.resolve_output_file_path(cfg, "陕西华润", "2026-02-08", Path.cwd())
         self.assertTrue(str(out).endswith("reports/陕西华润_inventory_risk_report.xlsx"))
 
     def test_resolve_output_file_path_uses_auto_name_when_legacy_default(self):
         cfg = {"output_file": "./reports/inventory_risk_report.xlsx"}
-        out = resolve_output_file_path(cfg, "陕西华润", "2026-02-08")
+        out = core_config.resolve_output_file_path(cfg, "陕西华润", "2026-02-08", Path.cwd())
         self.assertTrue(str(out).endswith("reports/陕西华润20260208库存预警.xlsx"))
 
     def test_resolve_expected_output_for_status_auto_name_has_placeholder(self):
         cfg = {"output_file": "./reports/inventory_risk_report.xlsx"}
-        out = resolve_expected_output_for_status(cfg, "陕西华润")
+        out = core_config.resolve_expected_output_for_status(cfg, "陕西华润", Path.cwd())
         self.assertTrue(out.endswith("reports/陕西华润{库存日期}库存预警.xlsx"))
 
     def test_run_batch_continue_on_error_true(self):
         with tempfile.TemporaryDirectory() as tmp:
             summary_path = Path(tmp) / "batch_run_summary.xlsx"
-            cfg = validate_config(
+            cfg = core_config.validate_config(
                 build_batch_config(
                     continue_on_error=True,
                     summary_output_file=str(summary_path),
@@ -450,7 +442,7 @@ class BatchModeTest(unittest.TestCase):
     def test_run_batch_enabled_false_becomes_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             summary_path = Path(tmp) / "batch_run_summary.xlsx"
-            cfg = validate_config(
+            cfg = core_config.validate_config(
                 build_batch_config(
                     continue_on_error=True,
                     summary_output_file=str(summary_path),
@@ -484,7 +476,7 @@ class BatchModeTest(unittest.TestCase):
     def test_run_batch_continue_on_error_false(self):
         with tempfile.TemporaryDirectory() as tmp:
             summary_path = Path(tmp) / "batch_run_summary.xlsx"
-            cfg = validate_config(
+            cfg = core_config.validate_config(
                 build_batch_config(
                     continue_on_error=False,
                     summary_output_file=str(summary_path),

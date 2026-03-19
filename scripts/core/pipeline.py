@@ -12,7 +12,6 @@ from . import io as core_io
 from . import matching as core_matching
 from . import metrics as core_metrics
 from . import output_tables as core_output_tables
-from . import recommendations as core_recommendations
 from . import report_writer as core_report_writer
 
 SUPPLIER_CARD_PROVINCE_MAP = {
@@ -47,7 +46,9 @@ def stage_error(stage: str, exc: Exception) -> RuntimeError:
 
 def map_province_by_supplier_card(card: Optional[str]) -> str:
     normalized = core_io.normalize_supplier_card_value(card)
-    return core_recommendations.map_province_by_supplier_card(normalized, SUPPLIER_CARD_PROVINCE_MAP)
+    if normalized is None:
+        return "其他/未知"
+    return SUPPLIER_CARD_PROVINCE_MAP.get(str(normalized), "其他/未知")
 
 
 def _parse_season_mode(season_mode_raw: Any) -> bool:

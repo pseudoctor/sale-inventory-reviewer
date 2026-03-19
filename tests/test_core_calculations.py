@@ -6,28 +6,14 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from scripts.generate_inventory_risk_report import (
-    apply_inventory_metrics,
-    classify_risk_levels,
-    combine_daily_sales,
-    compute_case_counts,
-    extract_month_key,
-    generate_report_for_system,
-    list_ignored_sales_files,
-    map_province_by_supplier_card,
-    normalize_barcode_value,
-    normalize_inventory_df,
-    normalize_sales_df,
-    read_excel_first_sheet,
-    overlap_days,
-    parse_sales_dates,
-    resolve_sales_candidates,
-    validate_config,
-)
+from scripts.generate_inventory_risk_report import generate_report_for_system
+from scripts.core.config import validate_config
 from scripts.core import io as core_io
 from scripts.core import matching as core_matching
+from scripts.core.metrics import apply_inventory_metrics, classify_risk_levels, combine_daily_sales, overlap_days
 from scripts.core import output_tables as core_output_tables
 from scripts.core import pipeline as core_pipeline
+from scripts.core.output_tables import compute_case_counts
 from tests.helpers import build_single_config, write_excel
 
 
@@ -192,20 +178,20 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(out["turnover_days"].tolist(), [44.0, 30.0])
 
     def test_normalize_barcode_value(self):
-        self.assertEqual(normalize_barcode_value(6907992633671.0), "6907992633671")
-        self.assertEqual(normalize_barcode_value("6907992633671.0"), "6907992633671")
-        self.assertEqual(normalize_barcode_value("6.907992633671E12"), "6907992633671")
-        self.assertEqual(normalize_barcode_value(" 6907992633671 "), "6907992633671")
-        self.assertIsNone(normalize_barcode_value("nan"))
+        self.assertEqual(core_io.normalize_barcode_value(6907992633671.0), "6907992633671")
+        self.assertEqual(core_io.normalize_barcode_value("6907992633671.0"), "6907992633671")
+        self.assertEqual(core_io.normalize_barcode_value("6.907992633671E12"), "6907992633671")
+        self.assertEqual(core_io.normalize_barcode_value(" 6907992633671 "), "6907992633671")
+        self.assertIsNone(core_io.normalize_barcode_value("nan"))
 
     def test_parse_sales_dates_with_explicit_format(self):
         raw = pd.Series(["2026/02/01", "2026/02/02", "bad"])
-        parsed = parse_sales_dates(raw, "%Y/%m/%d", dayfirst=False)
+        parsed = core_io.parse_sales_dates(raw, "%Y/%m/%d", dayfirst=False)
         self.assertEqual(parsed.notna().sum(), 2)
 
     def test_parse_sales_dates_with_dayfirst(self):
         raw = pd.Series(["01/02/2026"])
-        parsed = parse_sales_dates(raw, "", dayfirst=True)
+        parsed = core_io.parse_sales_dates(raw, "", dayfirst=True)
         self.assertEqual(str(parsed.iloc[0].date()), "2026-02-01")
 
     def test_compute_case_counts_peak_and_offpeak(self):
@@ -219,12 +205,12 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertTrue(pd.isna(off_peak.iloc[4]))
 
     def test_map_province_by_supplier_card(self):
-        self.assertEqual(map_province_by_supplier_card("153085"), "宁夏")
-        self.assertEqual(map_province_by_supplier_card("680249.0"), "甘肃")
-        self.assertEqual(map_province_by_supplier_card("153412"), "宁夏")
-        self.assertEqual(map_province_by_supplier_card("152901"), "监狱系统")
-        self.assertEqual(map_province_by_supplier_card("999999"), "其他/未知")
-        self.assertEqual(map_province_by_supplier_card(None), "其他/未知")
+        self.assertEqual(core_pipeline.map_province_by_supplier_card("153085"), "宁夏")
+        self.assertEqual(core_pipeline.map_province_by_supplier_card("680249.0"), "甘肃")
+        self.assertEqual(core_pipeline.map_province_by_supplier_card("153412"), "宁夏")
+        self.assertEqual(core_pipeline.map_province_by_supplier_card("152901"), "监狱系统")
+        self.assertEqual(core_pipeline.map_province_by_supplier_card("999999"), "其他/未知")
+        self.assertEqual(core_pipeline.map_province_by_supplier_card(None), "其他/未知")
 
     def test_normalize_inventory_df_supports_current_inventory_column(self):
         df = pd.DataFrame(
@@ -236,7 +222,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "供商卡号": ["153085"],
             }
         )
-        out_df, _, _, _, _, qty_col, supplier_col = normalize_inventory_df(df)
+        out_df, _, _, _, _, qty_col, supplier_col = core_io.normalize_inventory_df(df)
         self.assertEqual(qty_col, "当前库存")
         self.assertEqual(supplier_col, "供商卡号")
         self.assertEqual(float(out_df[qty_col].iloc[0]), 10.0)
@@ -251,7 +237,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "销售时间": ["2026-02-01"],
             }
         )
-        out_df, _, _, _, _, qty_col, _, _ = normalize_sales_df(df)
+        out_df, _, _, _, _, qty_col, _, _ = core_io.normalize_sales_df(df)
         self.assertEqual(float(out_df[qty_col].iloc[0]), 1234.0)
         self.assertEqual(int(out_df.attrs.get("invalid_qty_rows", -1)), 0)
 
@@ -264,7 +250,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "当前库存": ["12", "bad", ""],
             }
         )
-        out_df, _, _, _, _, qty_col, _ = normalize_inventory_df(df)
+        out_df, _, _, _, _, qty_col, _ = core_io.normalize_inventory_df(df)
         self.assertEqual(out_df[qty_col].tolist(), [12.0, 0.0, 0.0])
         self.assertEqual(int(out_df.attrs.get("invalid_qty_rows", -1)), 1)
 
@@ -273,14 +259,14 @@ class CoreCalculationsTest(unittest.TestCase):
             root = Path(tmp)
             custom = root / "sales_custom_name.xlsx"
             custom.touch()
-            out = resolve_sales_candidates(root, ["sales_custom_name.xlsx"])
+            out = core_io.resolve_sales_candidates(root, ["sales_custom_name.xlsx"])
             self.assertEqual([p.resolve() for p in out], [custom.resolve()])
 
     def test_resolve_sales_candidates_rejects_configured_path_outside_raw_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with self.assertRaises(ValueError):
-                resolve_sales_candidates(root, ["../outside.xlsx"])
+                core_io.resolve_sales_candidates(root, ["../outside.xlsx"])
 
     def test_resolve_sales_candidates_autodetect_by_yyyymm(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -298,12 +284,12 @@ class CoreCalculationsTest(unittest.TestCase):
             invalid_month.touch()
             bad.touch()
             inv.touch()
-            out = resolve_sales_candidates(root, [])
+            out = core_io.resolve_sales_candidates(root, [])
             self.assertEqual(out, [dec, jan, feb_xls])
 
     def test_extract_month_key_rejects_invalid_month(self):
-        self.assertEqual(extract_month_key("销售202612.xlsx"), 202612)
-        self.assertIsNone(extract_month_key("销售202613.xlsx"))
+        self.assertEqual(core_io.extract_month_key("销售202612.xlsx"), 202612)
+        self.assertIsNone(core_io.extract_month_key("销售202613.xlsx"))
 
     def test_list_ignored_sales_files_reports_non_sales_and_inventory_files(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -311,7 +297,7 @@ class CoreCalculationsTest(unittest.TestCase):
             (root / "库存202601.xlsx").touch()
             (root / "202601.xlsx").touch()
             (root / "销售文件.xlsx").touch()
-            ignored = list_ignored_sales_files(root, [])
+            ignored = core_io.list_ignored_sales_files(root, [])
             self.assertTrue(any("inventory-like" in x for x in ignored))
             self.assertTrue(any("missing sales keyword" in x for x in ignored))
 
@@ -325,7 +311,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "销售时间": ["2026-02-01"],
             }
         )
-        _, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_col = normalize_sales_df(df)
+        _, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_col = core_io.normalize_sales_df(df)
         self.assertEqual(store_col, "门店名称")
         self.assertIsNone(brand_col)
         self.assertEqual(product_col, "商品名称")
@@ -344,7 +330,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "销售时间": ["2026-02-01"],
             }
         )
-        _, _, _, _, barcode_col, _, _, _ = normalize_sales_df(df)
+        _, _, _, _, barcode_col, _, _, _ = core_io.normalize_sales_df(df)
         self.assertEqual(barcode_col, "国条码")
 
     def test_load_carton_factor_cached_hits_loader_once(self):
@@ -396,7 +382,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "销售时间": ["2026-02-01"],
             }
         )
-        _, _, _, _, barcode_col, _, _, _ = normalize_sales_df(df)
+        _, _, _, _, barcode_col, _, _, _ = core_io.normalize_sales_df(df)
         self.assertEqual(barcode_col, "国条码")
 
     def test_normalize_inventory_df_supports_national_barcode_only(self):
@@ -408,7 +394,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "当前库存": ["10"],
             }
         )
-        out_df, _, _, _, barcode_col, qty_col, _ = normalize_inventory_df(df)
+        out_df, _, _, _, barcode_col, qty_col, _ = core_io.normalize_inventory_df(df)
         self.assertEqual(barcode_col, "国条码")
         self.assertEqual(qty_col, "当前库存")
         self.assertEqual(float(out_df[qty_col].iloc[0]), 10.0)
@@ -423,7 +409,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "当前库存": ["10"],
             }
         )
-        _, _, _, _, barcode_col, _, _ = normalize_inventory_df(df)
+        _, _, _, _, barcode_col, _, _ = core_io.normalize_inventory_df(df)
         self.assertEqual(barcode_col, "国条码")
 
     def test_read_excel_first_sheet_requires_xlrd_for_xls(self):
@@ -432,7 +418,7 @@ class CoreCalculationsTest(unittest.TestCase):
             path.touch()
             with patch("scripts.core.io.importlib.util.find_spec", return_value=None):
                 with self.assertRaises(ModuleNotFoundError):
-                    read_excel_first_sheet(path)
+                    core_io.read_excel_first_sheet(path)
 
     def test_extract_brand_from_product_prefers_earliest_position(self):
         product = "特选奶源伊利蒙牛联名款"
