@@ -549,10 +549,6 @@ def test_sales_supplier_fallback_handles_duplicate_store_barcode(tmp_path: Path)
     row = rows.iloc[0]
     assert float(row["近三月+本月迄今平均日销"]) > 0
     assert row["商品名称"] == "商品名2"
-    assert row["名称来源规则"] == "latest_sales_name"
-    assert row["品牌来源规则"] == "latest_sales_brand"
-    assert int(row["同键名称数"]) == 2
-    assert int(row["同键品牌数"]) == 1
 
     status = _read_overview_group(output_file, "运行状态")
     status_map = dict(zip(status["指标"], status["数值"]))

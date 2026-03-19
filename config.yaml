@@ -67,6 +67,7 @@ batch:
         - "陕西华润销售202512.xlsx"
         - "陕西华润销售202601.xlsx"
         - "陕西华润销售202602.xlsx"
+        - "陕西华润销售202603.xlsx"
       inventory_file: "陕西华润库存.xlsx"
     - enabled: true
       system_id: "gansu_huarun"

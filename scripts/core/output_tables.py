@@ -140,10 +140,6 @@ def build_report_frames(
             "库存周转天数",
             "建议调出数量",
             "建议补货数量",
-            "名称来源规则",
-            "品牌来源规则",
-            "同键名称数",
-            "同键品牌数",
         ],
     )
     detail_out = detail_out[detail_output_columns]
