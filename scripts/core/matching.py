@@ -8,8 +8,29 @@ from . import io as core_io
 from . import metrics as core_metrics
 
 
+def _prepare_match_keys(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["store_key"] = out.get("store_code", pd.Series(index=out.index)).apply(core_io.normalize_barcode_value)
+    out["product_key"] = out.get("product_code", pd.Series(index=out.index)).apply(core_io.normalize_barcode_value)
+    out["barcode_key"] = out["barcode"].apply(core_io.normalize_barcode_value)
+    out["store_key"] = out["store_key"].where(out["store_key"].notna(), out["store"])
+    out["product_key"] = out["product_key"].where(out["product_key"].notna(), out["barcode_key"])
+    return out
+
+
+def _coalesce_store_column(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "store" in out.columns:
+        return out
+    for candidate in ["store_x", "store_y"]:
+        if candidate in out.columns:
+            out["store"] = out[candidate]
+            break
+    return out
+
+
 def _build_sales_key_mapping(sales_df: pd.DataFrame) -> pd.DataFrame:
-    key_cols = ["store", "barcode_key"]
+    key_cols = ["store_key", "product_key"]
     sorted_sales = sales_df.copy()
     # Deterministic tie-break for same-day records:
     # 1) latest sales_date
@@ -60,6 +81,7 @@ def build_detail_with_matching(
     inventory_date_ts: pd.Timestamp,
     mtd_days: int,
     recent_days_effective: int,
+    recent_days_natural: int = 30,
     has_mtd_window_data: bool,
     has_recent_window_data: bool,
     use_peak_mode: bool,
@@ -68,34 +90,33 @@ def build_detail_with_matching(
     is_wumei_system: bool,
     province_mapper: Callable[[str | None], str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float]]:
-    sales_df = sales_df.copy()
-    sales_df["barcode_key"] = sales_df["barcode"].apply(core_io.normalize_barcode_value)
+    sales_df = _prepare_match_keys(sales_df)
     sales_3m_mtd = sales_df[(sales_df["sales_date"] >= mtd_start) & (sales_df["sales_date"] <= mtd_end)]
     sales_30d = sales_df[(sales_df["sales_date"] >= recent_start) & (sales_df["sales_date"] <= inventory_date_ts)]
 
     sales_totals = (
-        sales_df.groupby(["store", "barcode_key"], as_index=False)["sales_qty"]
+        sales_df.groupby(["store_key", "product_key"], as_index=False)["sales_qty"]
         .sum()
         .rename(columns={"sales_qty": "sales_qty_total"})
     )
     sales_totals = sales_totals.merge(
-        sales_3m_mtd.groupby(["store", "barcode_key"], as_index=False)["sales_qty"]
+        sales_3m_mtd.groupby(["store_key", "product_key"], as_index=False)["sales_qty"]
         .sum()
         .rename(columns={"sales_qty": "sales_qty_3m_mtd"}),
-        on=["store", "barcode_key"],
+        on=["store_key", "product_key"],
         how="left",
     )
     sales_totals = sales_totals.merge(
-        sales_30d.groupby(["store", "barcode_key"], as_index=False)["sales_qty"]
+        sales_30d.groupby(["store_key", "product_key"], as_index=False)["sales_qty"]
         .sum()
         .rename(columns={"sales_qty": "sales_qty_30d"}),
-        on=["store", "barcode_key"],
+        on=["store_key", "product_key"],
         how="left",
     )
     sales_totals["sales_qty_3m_mtd"] = sales_totals["sales_qty_3m_mtd"].fillna(0)
     sales_totals["sales_qty_30d"] = sales_totals["sales_qty_30d"].fillna(0)
     sales_totals["daily_sales_3m_mtd"] = sales_totals["sales_qty_3m_mtd"] / mtd_days if has_mtd_window_data else 0
-    sales_totals["daily_sales_30d"] = sales_totals["sales_qty_30d"] / recent_days_effective if has_recent_window_data else 0
+    sales_totals["daily_sales_30d"] = sales_totals["sales_qty_30d"] / recent_days_natural if has_recent_window_data else 0
     sales_totals["forecast_daily_sales"] = core_metrics.combine_daily_sales(
         sales_totals["daily_sales_3m_mtd"],
         sales_totals["daily_sales_30d"],
@@ -104,15 +125,21 @@ def build_detail_with_matching(
 
     sales_mapping = _build_sales_key_mapping(sales_df)
     sales_supplier = (
-        sales_df.groupby(["store", "barcode_key"])["supplier_card"]
+        sales_df.groupby(["store_key", "product_key"])["supplier_card"]
         .agg(core_io.pick_first_non_empty)
         .reset_index(name="supplier_card")
     )
+    sales_store = (
+        sales_df.groupby(["store_key", "product_key"])["store"]
+        .agg(core_io.pick_first_non_empty)
+        .reset_index(name="store")
+    )
+    sales_totals = sales_totals.merge(sales_store, on=["store_key", "product_key"], how="left")
     sales_totals = sales_totals.merge(
         sales_mapping[
             [
-                "store",
-                "barcode_key",
+                "store_key",
+                "product_key",
                 "display_product_name",
                 "display_brand",
                 "display_barcode",
@@ -123,16 +150,16 @@ def build_detail_with_matching(
                 "record_rows",
             ]
         ],
-        on=["store", "barcode_key"],
+        on=["store_key", "product_key"],
         how="left",
     )
-    sales_totals = sales_totals.merge(sales_supplier, on=["store", "barcode_key"], how="left")
+    sales_totals = sales_totals.merge(sales_supplier, on=["store_key", "product_key"], how="left")
 
-    inv_df = inv_df.copy()
-    inv_df["barcode_key"] = inv_df["barcode"].apply(core_io.normalize_barcode_value)
+    inv_df = _prepare_match_keys(inv_df)
     inv_totals = (
-        inv_df.groupby(["store", "barcode_key"], as_index=False)
+        inv_df.groupby(["store_key", "product_key"], as_index=False)
         .agg(
+            store=("store", core_io.pick_first_non_empty),
             inventory_qty=("inventory_qty", "sum"),
             inventory_brand=("brand", core_io.pick_first_non_empty),
             inventory_product=("product", core_io.pick_first_non_empty),
@@ -145,8 +172,8 @@ def build_detail_with_matching(
     detail = detail.merge(
         sales_totals[
             [
-                "store",
-                "barcode_key",
+                "store_key",
+                "product_key",
                 "daily_sales_3m_mtd",
                 "daily_sales_30d",
                 "forecast_daily_sales",
@@ -160,7 +187,7 @@ def build_detail_with_matching(
                 "brand_conflict_count",
             ]
         ],
-        on=["store", "barcode_key"],
+        on=["store_key", "product_key"],
         how="left",
     )
 
@@ -189,12 +216,13 @@ def build_detail_with_matching(
         detail["supplier_card"],
     )
     detail["province"] = detail["supplier_card"].apply(province_mapper)
-    detail["barcode"] = detail["inventory_barcode"].where(detail["inventory_barcode"].notna(), detail["barcode_key"])
+    detail["barcode"] = detail["inventory_barcode"].where(detail["inventory_barcode"].notna(), detail["product_key"])
     detail["barcode_output"] = (
         detail["display_barcode"].where(detail["display_barcode"].notna(), detail["barcode"])
         if is_wumei_system
         else detail["barcode"]
     )
+    detail = _coalesce_store_column(detail)
 
     detail = core_metrics.apply_inventory_metrics(detail, low_days, high_days)
     detail = detail[[
@@ -215,23 +243,27 @@ def build_detail_with_matching(
     brand_summary = core_metrics.apply_inventory_metrics(brand_summary, low_days, high_days)
 
     missing_sales = sales_totals.merge(
-        inv_totals[["store", "barcode_key"]].dropna(subset=["barcode_key"]).drop_duplicates().assign(_has_inv_barcode=True),
-        on=["store", "barcode_key"],
+        inv_totals[["store_key", "product_key"]]
+        .dropna(subset=["product_key"])
+        .drop_duplicates()
+        .assign(_has_inv_product=True),
+        on=["store_key", "product_key"],
         how="left",
     )
     missing_sales = missing_sales[
-        missing_sales["_has_inv_barcode"].isna() & (missing_sales["forecast_daily_sales"] > 0)
+        missing_sales["_has_inv_product"].isna() & (missing_sales["forecast_daily_sales"] > 0)
     ].copy()
-    missing_sales = missing_sales.drop(columns=["_has_inv_barcode"])
+    missing_sales = missing_sales.drop(columns=["_has_inv_product"])
     missing_sales["product"] = missing_sales["display_product_name"].fillna("")
     missing_sales["brand"] = missing_sales["display_brand"].fillna("")
     missing_sales.loc[missing_sales["brand"].astype(str).str.strip() == "", "brand"] = "其他/未知"
-    missing_sales["barcode"] = missing_sales["barcode_key"]
+    missing_sales["barcode"] = missing_sales["product_key"]
     missing_sales["name_source_rule"] = "latest_sales_name"
     missing_sales["brand_source_rule"] = "latest_sales_brand"
     missing_sales["name_conflict_count"] = pd.to_numeric(missing_sales["name_conflict_count"], errors="coerce").fillna(0).astype(int)
     missing_sales["brand_conflict_count"] = pd.to_numeric(missing_sales["brand_conflict_count"], errors="coerce").fillna(0).astype(int)
     missing_sales["province"] = missing_sales["supplier_card"].apply(province_mapper)
+    missing_sales = _coalesce_store_column(missing_sales)
 
     if not missing_sales.empty:
         missing_detail = missing_sales.copy()
@@ -256,7 +288,7 @@ def build_detail_with_matching(
 
     detail = detail.sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
     mapping_stats = {
-        "duplicate_store_barcode_keys": int((sales_mapping["record_rows"] > 1).sum()),
+        "duplicate_store_product_keys": int((sales_mapping["record_rows"] > 1).sum()),
         "name_conflict_keys": int((sales_mapping["name_conflict_count"] > 1).sum()),
         "brand_conflict_keys": int((sales_mapping["brand_conflict_count"] > 1).sum()),
         "mapping_coverage_rate": mapping_coverage_rate,

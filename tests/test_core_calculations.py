@@ -31,7 +31,47 @@ from scripts.core import pipeline as core_pipeline
 from tests.helpers import build_single_config, write_excel
 
 
+def _read_overview_group(output_file: Path, group_name: str) -> pd.DataFrame:
+    overview = pd.read_excel(output_file, sheet_name="运行总览", header=1)
+    return overview.loc[overview["分组"] == group_name].copy()
+
+
 class CoreCalculationsTest(unittest.TestCase):
+    def test_usage_guide_frame_contains_key_logic_rows(self):
+        frames = core_output_tables.build_report_frames(
+            detail=pd.DataFrame(columns=[
+                "store", "brand", "barcode_output", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d",
+                "inventory_qty", "out_of_stock", "risk_level", "inventory_sales_ratio", "turnover_rate",
+                "turnover_days", "suggest_outbound_qty", "suggest_replenish_qty", "name_source_rule",
+                "brand_source_rule", "name_conflict_count", "brand_conflict_count",
+            ]),
+            missing_sales=pd.DataFrame(columns=[
+                "store", "brand", "display_barcode", "barcode", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d",
+            ]),
+            store_summary=pd.DataFrame(columns=[
+                "store", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales", "inventory_qty",
+                "risk_level", "inventory_sales_ratio", "turnover_rate", "turnover_days",
+            ]),
+            brand_summary=pd.DataFrame(columns=[
+                "brand", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales", "inventory_qty",
+                "risk_level", "inventory_sales_ratio", "turnover_rate", "turnover_days",
+            ]),
+            product_code_catalog=pd.DataFrame(columns=[
+                "product_code", "brand", "standard_product_name", "sales_product_name", "inventory_product_name", "source_status"
+            ]),
+            carton_factor_df=pd.DataFrame(columns=["商品条码", "商品名称", "装箱数（因子）"]),
+            is_wumei_system=False,
+            enable_province_column=False,
+            use_peak_mode=False,
+        )
+        guide = frames["使用说明"]
+        guide_map = dict(zip(guide["模块"], guide["说明"]))
+        self.assertIn("缺货清单", guide_map)
+        self.assertIn("库存缺失SKU清单", guide_map)
+        self.assertIn("建议补货清单", guide_map)
+        self.assertIn("商品编码 + 门店编码", guide_map["匹配逻辑"])
+        self.assertIn("缺货清单", guide_map["易混概念区分"])
+
     def test_validate_config_rejects_invalid_risk_thresholds(self):
         with self.assertRaises(ValueError):
             validate_config(
@@ -505,6 +545,9 @@ class CoreCalculationsTest(unittest.TestCase):
             missing_sales=missing_sales,
             store_summary=store_summary,
             brand_summary=brand_summary,
+            product_code_catalog=pd.DataFrame(
+                columns=["product_code", "brand", "standard_product_name", "sales_product_name", "inventory_product_name", "source_status"]
+            ),
             carton_factor_df=carton_factor_df,
             is_wumei_system=False,
             enable_province_column=False,
@@ -589,6 +632,9 @@ class CoreCalculationsTest(unittest.TestCase):
             missing_sales=missing_sales,
             store_summary=store_summary,
             brand_summary=brand_summary,
+            product_code_catalog=pd.DataFrame(
+                columns=["product_code", "brand", "standard_product_name", "sales_product_name", "inventory_product_name", "source_status"]
+            ),
             carton_factor_df=carton_factor_df,
             is_wumei_system=False,
             enable_province_column=False,
@@ -599,13 +645,15 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(replenish.iloc[0]["建议补货数量"], 1)
         self.assertEqual(replenish.iloc[0]["建议补货箱数"], "1件")
 
-    def test_matching_uses_store_barcode_key_and_latest_name_brand(self):
+    def test_matching_uses_store_code_product_code_and_latest_name_brand(self):
         sales_df = pd.DataFrame(
             {
                 "store": ["门店A", "门店A", "门店A"],
+                "store_code": ["S1", "S1", "S1"],
                 "brand": ["品牌旧", "品牌新", "品牌X"],
                 "product": ["旧名称", "新名称", "独立SKU"],
-                "barcode": ["6901", "6901", "6902"],
+                "barcode": ["6901", "6909", "6902"],
+                "product_code": ["P1", "P1", "P2"],
                 "display_barcode": ["6901", "6901", "6902"],
                 "sales_qty": [3, 7, 5],
                 "sales_date": pd.to_datetime(["2026-02-01", "2026-02-08", "2026-02-08"]),
@@ -615,9 +663,11 @@ class CoreCalculationsTest(unittest.TestCase):
         inv_df = pd.DataFrame(
             {
                 "store": ["门店A", "门店A"],
+                "store_code": ["S1", "S1"],
                 "brand": ["库存品牌", "库存品牌X"],
                 "product": ["库存名称", "独立SKU"],
-                "barcode": ["6901", "6902"],
+                "barcode": ["INV-P1", "6902"],
+                "product_code": ["P1", "P2"],
                 "inventory_qty": [20, 10],
                 "supplier_card": [None, None],
             }
@@ -642,14 +692,14 @@ class CoreCalculationsTest(unittest.TestCase):
         )
 
         self.assertEqual(len(detail), 2)
-        key_row = detail.loc[detail["barcode"] == "6901"].iloc[0]
+        key_row = detail.loc[detail["barcode"] == "INV-P1"].iloc[0]
         self.assertEqual(key_row["product"], "新名称")
         self.assertEqual(key_row["brand"], "品牌新")
         self.assertEqual(key_row["name_source_rule"], "latest_sales_name")
         self.assertEqual(key_row["brand_source_rule"], "latest_sales_brand")
         self.assertEqual(int(key_row["name_conflict_count"]), 2)
         self.assertEqual(int(key_row["brand_conflict_count"]), 2)
-        self.assertEqual(mapping_stats["duplicate_store_barcode_keys"], 1)
+        self.assertEqual(mapping_stats["duplicate_store_product_keys"], 1)
         self.assertEqual(mapping_stats["name_conflict_keys"], 1)
         self.assertEqual(mapping_stats["brand_conflict_keys"], 1)
         self.assertEqual(len(missing_sales), 0)
@@ -660,9 +710,11 @@ class CoreCalculationsTest(unittest.TestCase):
         sales_df = pd.DataFrame(
             {
                 "store": ["门店A", "门店A"],
+                "store_code": ["S1", "S1"],
                 "brand": ["品牌B", "品牌A"],
                 "product": ["名称B", "名称A"],
-                "barcode": ["6901", "6901"],
+                "barcode": ["6901", "6909"],
+                "product_code": ["P1", "P1"],
                 "display_barcode": ["6901", "6901"],
                 "sales_qty": [5, 5],
                 "sales_date": pd.to_datetime(["2026-02-08", "2026-02-08"]),
@@ -672,9 +724,11 @@ class CoreCalculationsTest(unittest.TestCase):
         inv_df = pd.DataFrame(
             {
                 "store": ["门店A"],
+                "store_code": ["S1"],
                 "brand": ["库存品牌"],
                 "product": ["库存名称"],
-                "barcode": ["6901"],
+                "barcode": ["INV-P1"],
+                "product_code": ["P1"],
                 "inventory_qty": [10],
                 "supplier_card": [None],
             }
@@ -702,7 +756,7 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(row["product"], "名称B")
         self.assertEqual(row["brand"], "品牌B")
 
-    def test_wumei_inventory_code_maps_to_national_barcode_and_avoids_split_rows(self):
+    def test_wumei_matches_by_store_code_and_product_code_and_keeps_national_barcode_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             system_dir = root / "raw_data" / "宁夏物美"
@@ -715,6 +769,7 @@ class CoreCalculationsTest(unittest.TestCase):
             write_excel(
                 pd.DataFrame(
                 {
+                    "门店编码": ["1001"],
                     "门店名称": ["物美A店"],
                     "商品编码": ["817620"],
                     "国条码": ["6970000000001"],
@@ -729,6 +784,7 @@ class CoreCalculationsTest(unittest.TestCase):
             write_excel(
                 pd.DataFrame(
                 {
+                    "门店编码": ["1001"],
                     "门店名称": ["物美A店"],
                     "商品编码": ["817620"],
                     "商品名称": ["测试SKU"],
@@ -769,12 +825,11 @@ class CoreCalculationsTest(unittest.TestCase):
             self.assertEqual(str(detail.iloc[0]["商品条码"]), "6970000000001")
             self.assertGreater(float(detail.iloc[0]["近三月+本月迄今平均日销"]), 0)
 
-            status = pd.read_excel(output_file, sheet_name="运行状态", header=1)
-            status_map = dict(zip(status["状态项"], status["值"]))
-            self.assertEqual(int(status_map["物美条码映射命中行数"]), 1)
-            self.assertEqual(int(status_map["物美条码映射回退行数"]), 0)
+            status = _read_overview_group(output_file, "运行状态")
+            status_map = dict(zip(status["指标"], status["数值"]))
+            self.assertEqual(int(status_map["同店同商品编码重复键数"]), 0)
 
-    def test_wumei_inventory_barcode_falls_back_to_product_code_when_mapping_missing(self):
+    def test_wumei_different_product_code_does_not_match_even_when_national_barcode_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             system_dir = root / "raw_data" / "宁夏物美"
@@ -787,6 +842,7 @@ class CoreCalculationsTest(unittest.TestCase):
             write_excel(
                 pd.DataFrame(
                 {
+                    "门店编码": ["1002"],
                     "门店名称": ["物美B店"],
                     "商品编码": ["111111"],
                     "国条码": ["6991111111111"],
@@ -801,6 +857,7 @@ class CoreCalculationsTest(unittest.TestCase):
             write_excel(
                 pd.DataFrame(
                 {
+                    "门店编码": ["1002"],
                     "门店名称": ["物美B店"],
                     "商品编码": ["222222"],
                     "商品名称": ["库存SKU"],
@@ -839,11 +896,11 @@ class CoreCalculationsTest(unittest.TestCase):
             detail["门店名称"] = detail["门店名称"].ffill()
             self.assertEqual(len(detail), 1)
             self.assertEqual(str(detail.iloc[0]["商品条码"]), "222222")
+            self.assertEqual(float(detail.iloc[0]["近三月+本月迄今平均日销"]), 0.0)
 
-            status = pd.read_excel(output_file, sheet_name="运行状态", header=1)
-            status_map = dict(zip(status["状态项"], status["值"]))
-            self.assertEqual(int(status_map["物美条码映射命中行数"]), 0)
-            self.assertEqual(int(status_map["物美条码映射回退行数"]), 1)
+            status = _read_overview_group(output_file, "运行状态")
+            status_map = dict(zip(status["指标"], status["数值"]))
+            self.assertEqual(int(status_map["同店同商品编码重复键数"]), 0)
 
     def test_generate_report_fails_with_clear_message_when_all_sales_dates_invalid(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1016,10 +1073,81 @@ class CoreCalculationsTest(unittest.TestCase):
             )
             generate_report_for_system(config, config)
 
-            status = pd.read_excel(output_file, sheet_name="运行状态", header=1)
-            status_map = dict(zip(status["状态项"], status["值"]))
+            status = _read_overview_group(output_file, "运行状态")
+            status_map = dict(zip(status["指标"], status["数值"]))
             self.assertEqual(int(status_map["销售数量解析失败行数"]), 1)
             self.assertEqual(int(status_map["库存数量解析失败行数"]), 1)
+
+    def test_product_code_catalog_sheet_contains_source_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            system_dir = root / "raw_data" / "陕西华润"
+            data_dir = root / "data"
+            reports_dir = root / "reports"
+            system_dir.mkdir(parents=True, exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
+            reports_dir.mkdir(parents=True, exist_ok=True)
+
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "门店编码": ["101", "101"],
+                        "门店名称": ["门店A", "门店A"],
+                        "商品编码": ["P1", "P2"],
+                        "商品条码": ["6901", "6902"],
+                        "商品名称": ["销售SKU1", "仅销售SKU"],
+                        "品牌": ["品牌A", "品牌A"],
+                        "销售数量": [10, 5],
+                        "销售时间": ["2026-02-08", "2026-02-08"],
+                    }
+                ),
+                system_dir / "销售202602.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "门店编码": ["101", "101"],
+                        "门店名称": ["门店A", "门店A"],
+                        "商品编码": ["P1", "P3"],
+                        "商品编码.1": ["6901", "6903"],
+                        "商品名称": ["库存SKU1", "仅库存SKU"],
+                        "品牌": ["品牌A", "品牌B"],
+                        "库存数量": [20, 7],
+                        "库存日期": ["2026-02-09", "2026-02-09"],
+                    }
+                ),
+                system_dir / "库存.xlsx",
+            )
+            write_excel(
+                pd.DataFrame(
+                    {
+                        "商品条码": ["6901", "6902", "6903"],
+                        "商品名称": ["销售SKU1", "仅销售SKU", "仅库存SKU"],
+                        "装箱数（因子）": [6, 6, 6],
+                    }
+                ),
+                data_dir / "sku装箱数.xlsx",
+            )
+
+            output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+            config = build_single_config(
+                system_id="shaanxi_huarun",
+                display_name="陕西华润",
+                raw_data_dir=str(root / "raw_data"),
+                data_subdir="陕西华润",
+                sales_files=["销售202602.xlsx"],
+                inventory_file="库存.xlsx",
+                output_file=str(output_file),
+                carton_factor_file=str(data_dir / "sku装箱数.xlsx"),
+                brand_keywords=["品牌A", "品牌B"],
+            )
+            generate_report_for_system(config, config)
+
+            catalog = pd.read_excel(output_file, sheet_name="商品编码对照清单", header=1)
+            status_by_code = dict(zip(catalog["商品编码"], catalog["来源状态"]))
+            self.assertEqual(status_by_code["P1"], "两表均存在")
+            self.assertEqual(status_by_code["P2"], "仅销售表")
+            self.assertEqual(status_by_code["P3"], "仅库存表")
 
 
 if __name__ == "__main__":

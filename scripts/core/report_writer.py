@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Dict
 
@@ -8,6 +9,12 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 PREFERRED_WIDTHS = {
+    "分组": 12,
+    "指标": 34,
+    "数值": 26,
+    "模块": 16,
+    "说明": 72,
+    "使用建议": 56,
     "门店名称": 18,
     "品牌": 10,
     "商品条码": 16,
@@ -57,18 +64,24 @@ def _set_sheet_title(ws, display_name: str, inventory_date: str, center: Alignme
     title = f"{display_name} | 库存日期：{inventory_date}"
     ws.cell(row=1, column=1, value=title)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
-    ws.cell(row=1, column=1).font = Font(bold=True)
+    ws.row_dimensions[1].height = 26
+    ws.cell(row=1, column=1).font = Font(bold=True, size=14, color="FFFFFF")
+    ws.cell(row=1, column=1).fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
     ws.cell(row=1, column=1).alignment = center
 
 
 def _set_freeze_and_filter(ws, sheet_name: str) -> None:
-    ws.freeze_panes = "E3" if sheet_name == "明细" else "A3"
+    if sheet_name == "使用说明":
+        ws.freeze_panes = "A3"
+    else:
+        ws.freeze_panes = "E3" if sheet_name == "明细" else "A3"
     last_col = ws.max_column
     ws.auto_filter.ref = f"A2:{ws.cell(row=2, column=last_col).column_letter}{ws.max_row}"
 
 
 def _style_headers(ws, header_fill: PatternFill, header_font: Font, center: Alignment) -> list:
     headers = [c.value for c in ws[2]]
+    ws.row_dimensions[2].height = 22
     for cell in ws[2]:
         cell.fill = header_fill
         cell.font = header_font
@@ -92,6 +105,29 @@ def _apply_column_widths(ws) -> None:
             ws.column_dimensions[col_letter].width = min(auto_width, 40)
 
 
+def _estimate_row_height(ws, row_idx: int, wrap_columns: set[str], min_height: int = 20) -> float:
+    max_lines = 1
+    is_usage_guide = ws.title == "使用说明"
+    for col_idx in range(1, ws.max_column + 1):
+        header = ws.cell(row=2, column=col_idx).value
+        if header not in wrap_columns:
+            continue
+        value = ws.cell(row=row_idx, column=col_idx).value
+        if value in (None, ""):
+            continue
+        col_letter = ws.cell(row=2, column=col_idx).column_letter
+        width = ws.column_dimensions[col_letter].width or PREFERRED_WIDTHS.get(str(header), 16)
+        chars_per_line = max(int(width * (0.75 if is_usage_guide else 1.1)), 8 if is_usage_guide else 12)
+        line_count = 0
+        for paragraph in str(value).splitlines() or [""]:
+            line_count += max(1, math.ceil(len(paragraph) / chars_per_line))
+        max_lines = max(max_lines, line_count)
+    line_height = 24 if is_usage_guide else 18
+    padding = 8 if is_usage_guide else 0
+    base_height = 34 if is_usage_guide else min_height
+    return max(base_height, line_height * max_lines + padding)
+
+
 def _style_data_rows(
     ws,
     headers: list,
@@ -99,9 +135,10 @@ def _style_data_rows(
     center: Alignment,
     risk_fills: Dict[str, PatternFill],
     out_of_stock_fill: PatternFill,
+    band_fill: PatternFill,
 ) -> Dict[str, int]:
     header_to_idx = {name: idx + 1 for idx, name in enumerate(headers)}
-    wrap_columns = {"门店名称", "商品名称"}
+    wrap_columns = {"门店名称", "商品名称", "说明", "使用建议", "指标", "数值"}
     for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
         for col_idx, cell in enumerate(row, start=1):
             header = headers[col_idx - 1]
@@ -113,9 +150,11 @@ def _style_data_rows(
                 cell.alignment = left
             if header in NUMBER_FORMATS:
                 cell.number_format = NUMBER_FORMATS[header]
+            if ws.title != "使用说明" and row[0].row % 2 == 1:
+                cell.fill = band_fill
 
         risk_idx = header_to_idx.get("风险等级")
-        if risk_idx is not None:
+        if risk_idx is not None and ws.title != "使用说明":
             risk_cell = row[risk_idx - 1]
             risk_fill = risk_fills.get(risk_cell.value)
             if risk_fill:
@@ -129,22 +168,38 @@ def _style_data_rows(
 
         avg_idx = header_to_idx.get("近三月+本月迄今平均日销")
         inv_idx = header_to_idx.get("库存数量")
-        if avg_idx is not None and inv_idx is not None:
+        if avg_idx is not None and inv_idx is not None and ws.title != "使用说明":
             avg_val = row[avg_idx - 1].value or 0
             inv_val = row[inv_idx - 1].value or 0
             if avg_val > 0 and inv_val == 0:
-                for cell in row:
-                    cell.fill = out_of_stock_fill
-                    cell.font = Font(color="FFFFFF", bold=True)
+                inventory_cell = row[inv_idx - 1]
+                inventory_cell.fill = out_of_stock_fill
+                inventory_cell.font = Font(color="FFFFFF", bold=True)
+                out_flag_idx = header_to_idx.get("缺货")
+                if out_flag_idx is not None:
+                    row[out_flag_idx - 1].fill = out_of_stock_fill
+                    row[out_flag_idx - 1].font = Font(color="FFFFFF", bold=True)
+                replenish_idx = header_to_idx.get("建议补货数量")
+                if replenish_idx is not None:
+                    row[replenish_idx - 1].fill = PatternFill(
+                        start_color="FDE68A",
+                        end_color="FDE68A",
+                        fill_type="solid",
+                    )
+                    row[replenish_idx - 1].font = Font(color="9A3412", bold=True)
+        ws.row_dimensions[row[0].row].height = _estimate_row_height(ws, row[0].row, wrap_columns)
     return header_to_idx
 
 
-def _apply_summary_metric_format(ws, header_to_idx: Dict[str, int]) -> None:
+def _apply_overview_metric_format(ws, header_to_idx: Dict[str, int]) -> None:
     if "指标" not in header_to_idx or "数值" not in header_to_idx:
         return
+    group_idx = header_to_idx.get("分组")
     metric_idx = header_to_idx["指标"] - 1
     value_idx = header_to_idx["数值"] - 1
     for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
+        if group_idx is not None and row[group_idx - 1].value != "核心指标":
+            continue
         metric_name = row[metric_idx].value
         if metric_name in SUMMARY_ONE_DECIMAL_METRICS and isinstance(row[value_idx].value, (int, float)):
             row[value_idx].number_format = "0.0"
@@ -169,7 +224,7 @@ def _merge_detail_store_cells(ws_detail, center: Alignment) -> None:
 
 
 def _apply_borders(wb) -> None:
-    thin = Side(style="thin", color="000000")
+    thin = Side(style="thin", color="D6E4F0")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     for ws in wb.worksheets:
         for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
@@ -188,26 +243,29 @@ def write_report_with_style(
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
     wb = load_workbook(output_file)
-    header_fill = PatternFill(start_color="E8EAF6", end_color="E8EAF6", fill_type="solid")
-    header_font = Font(bold=True)
+    header_fill = PatternFill(start_color="EAF1F8", end_color="EAF1F8", fill_type="solid")
+    header_font = Font(bold=True, color="1F3556")
     center = Alignment(horizontal="center", vertical="center")
     left = Alignment(horizontal="left", vertical="center")
     risk_fills = {
-        "高": PatternFill(start_color="F44336", end_color="F44336", fill_type="solid"),
-        "中": PatternFill(start_color="F59E0B", end_color="F59E0B", fill_type="solid"),
-        "低": PatternFill(start_color="4CAF50", end_color="4CAF50", fill_type="solid"),
+        "高": PatternFill(start_color="D92D20", end_color="D92D20", fill_type="solid"),
+        "中": PatternFill(start_color="F79009", end_color="F79009", fill_type="solid"),
+        "低": PatternFill(start_color="10B981", end_color="10B981", fill_type="solid"),
     }
-    out_of_stock_fill = PatternFill(start_color="7C3AED", end_color="7C3AED", fill_type="solid")
+    out_of_stock_fill = PatternFill(start_color="EF4444", end_color="EF4444", fill_type="solid")
+    band_fill = PatternFill(start_color="FAFCFE", end_color="FAFCFE", fill_type="solid")
 
     for sheet_name in sheets.keys():
         ws = wb[sheet_name]
+        ws.sheet_view.showGridLines = False
+        ws.sheet_properties.tabColor = "1F4E79" if sheet_name == "运行总览" else "7B94B0"
         _set_sheet_title(ws, display_name, inventory_date, center)
         _set_freeze_and_filter(ws, sheet_name)
         headers = _style_headers(ws, header_fill, header_font, center)
         _apply_column_widths(ws)
-        header_to_idx = _style_data_rows(ws, headers, left, center, risk_fills, out_of_stock_fill)
-        if sheet_name == "汇总":
-            _apply_summary_metric_format(ws, header_to_idx)
+        header_to_idx = _style_data_rows(ws, headers, left, center, risk_fills, out_of_stock_fill, band_fill)
+        if sheet_name == "运行总览":
+            _apply_overview_metric_format(ws, header_to_idx)
 
     ws_detail = wb["明细"] if "明细" in wb.sheetnames else None
     if ws_detail is not None:

@@ -54,8 +54,9 @@ batch:
       province_column_enabled: true
       data_subdir: "宁夏物美"
       sales_files:
-        - "物美销售20260228.xls"
-      inventory_file: "物美库存20260228.xls"
+        - "物美销售202602.xls"
+        - "物美销售202603.xls"
+      inventory_file: "物美库存.xls"
       carton_factor_file: "./data/sku装箱数.xlsx"
     - enabled: true
       system_id: "shaanxi_huarun"
@@ -74,4 +75,5 @@ batch:
       sales_files:
         - "甘肃华润销售202601.xlsx"
         - "甘肃华润销售202602.xlsx"
+        - "甘肃华润销售202603.xlsx"
       inventory_file: "甘肃华润库存.xlsx"

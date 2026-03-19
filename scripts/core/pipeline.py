@@ -104,15 +104,20 @@ def _load_sales_data(
             continue
         df = core_io.read_excel_first_sheet(filepath)
         df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col = core_io.normalize_sales_df(df)
+        store_code_col = core_io.find_column(df.columns.tolist(), ["门店编码", "store_code"])
         invalid_sales_qty_rows += int(df.attrs.get("invalid_qty_rows", 0))
 
         national_barcode_col = core_io.find_column(df.columns.tolist(), ["国条码"])
-        product_code_col = core_io.find_column(df.columns.tolist(), ["商品编码.1", "商品编码"])
+        product_code_col = core_io.find_column(df.columns.tolist(), ["商品编码", "product_code"])
         sales_columns = [store_col, product_col, barcode_col, qty_col, date_col]
         normalized_sales_columns = ["store", "product", "barcode", "sales_qty", "sales_date"]
+        if store_code_col is not None:
+            sales_columns.insert(1, store_code_col)
+            normalized_sales_columns.insert(1, "store_code")
         if brand_col is not None:
-            sales_columns.insert(1, brand_col)
-            normalized_sales_columns.insert(1, "brand")
+            brand_insert_at = 2 if store_code_col is not None else 1
+            sales_columns.insert(brand_insert_at, brand_col)
+            normalized_sales_columns.insert(brand_insert_at, "brand")
         if national_barcode_col is not None and national_barcode_col != barcode_col:
             sales_columns.append(national_barcode_col)
             normalized_sales_columns.append("national_barcode_raw")
@@ -127,6 +132,9 @@ def _load_sales_data(
         df.columns = normalized_sales_columns
         if "brand" not in df.columns:
             df["brand"] = None
+        if "store_code" not in df.columns:
+            df["store_code"] = None
+        df["store_code"] = df["store_code"].apply(core_io.normalize_barcode_value)
         df["barcode"] = df["barcode"].apply(core_io.normalize_barcode_value)
         if "national_barcode_raw" in df.columns:
             df["national_barcode"] = df["national_barcode_raw"].apply(core_io.normalize_barcode_value)
@@ -137,7 +145,7 @@ def _load_sales_data(
             df["national_barcode"] = None
         if "product_code" in df.columns:
             df["product_code"] = df["product_code"].apply(core_io.normalize_barcode_value)
-        elif barcode_col in {"商品编码.1", "商品编码"}:
+        elif barcode_col == "商品编码":
             df["product_code"] = df["barcode"]
         else:
             df["product_code"] = None
@@ -222,19 +230,41 @@ def _prepare_inventory_data(
     output_file = core_config.resolve_output_file_path(config, display_name, inventory_date, base_dir)
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    inv_df, inv_store, inv_brand, inv_product, inv_barcode, inv_qty, inv_supplier_card = core_io.normalize_inventory_df(inv_df)
+    normalized_inv_df, inv_store, inv_brand, inv_product, inv_barcode, inv_qty, inv_supplier_card = core_io.normalize_inventory_df(inv_df)
     if inv_brand is None:
         raise ValueError("Inventory brand column normalization failed unexpectedly.")
-    invalid_inventory_qty_rows = int(inv_df.attrs.get("invalid_qty_rows", 0))
+    invalid_inventory_qty_rows = int(normalized_inv_df.attrs.get("invalid_qty_rows", 0))
 
+    inv_store_code = core_io.find_column(normalized_inv_df.columns.tolist(), ["门店编码", "store_code"])
+    inv_product_code = core_io.find_column(normalized_inv_df.columns.tolist(), ["商品编码", "product_code"])
     inventory_columns = [inv_store, inv_brand, inv_product, inv_barcode, inv_qty]
+    if inv_store_code is not None:
+        inventory_columns.insert(1, inv_store_code)
     if inv_supplier_card is not None:
         inventory_columns.append(inv_supplier_card)
-    inv_df = inv_df[inventory_columns].copy()
-    inv_df.columns = ["store", "brand", "product", "barcode", "inventory_qty"] + (
+    inv_product_code_values = (
+        normalized_inv_df[inv_product_code].apply(core_io.normalize_barcode_value)
+        if inv_product_code is not None
+        else None
+    )
+    inv_df = normalized_inv_df[inventory_columns].copy()
+    inv_df.columns = (
+        ["store", "store_code", "brand", "product", "barcode", "inventory_qty"]
+        if inv_store_code is not None
+        else ["store", "brand", "product", "barcode", "inventory_qty"]
+    ) + (
         ["supplier_card"] if inv_supplier_card is not None else []
     )
+    if "store_code" not in inv_df.columns:
+        inv_df["store_code"] = None
+    inv_df["store_code"] = inv_df["store_code"].apply(core_io.normalize_barcode_value)
     inv_df["barcode"] = inv_df["barcode"].apply(core_io.normalize_barcode_value)
+    if inv_product_code_values is not None:
+        inv_df["product_code"] = inv_product_code_values.values
+    elif inv_barcode == "商品编码":
+        inv_df["product_code"] = inv_df["barcode"]
+    else:
+        inv_df["product_code"] = None
     if "supplier_card" not in inv_df.columns:
         inv_df["supplier_card"] = None
     inv_df["supplier_card"] = inv_df["supplier_card"].apply(core_io.normalize_supplier_card_value)
@@ -248,48 +278,10 @@ def _apply_wumei_barcode_mapping(
     sales_df: pd.DataFrame,
     is_wumei_system: bool,
 ) -> tuple[pd.DataFrame, int, int, int, str]:
+    _ = sales_df
     if not is_wumei_system:
         return inv_df, 0, 0, 0, ""
-
-    wumei_barcode_map_hits = 0
-    wumei_barcode_map_fallback = 0
-    wumei_barcode_map_conflicts = 0
-    wumei_barcode_conflict_samples = ""
-
-    code_to_national_map, wumei_barcode_map_conflicts = core_io.build_unambiguous_source_to_target_map(
-        sales_df,
-        source_col="product_code",
-        target_col="national_barcode",
-        output_col="national_barcode_mapped",
-    )
-    conflict_base = sales_df[["product_code", "national_barcode"]].copy()
-    conflict_base["product_code"] = conflict_base["product_code"].apply(core_io.normalize_barcode_value)
-    conflict_base["national_barcode"] = conflict_base["national_barcode"].apply(core_io.normalize_barcode_value)
-    conflict_base = conflict_base.dropna(subset=["product_code", "national_barcode"]).drop_duplicates(
-        subset=["product_code", "national_barcode"]
-    )
-    if not conflict_base.empty:
-        conflict_counts = conflict_base.groupby("product_code")["national_barcode"].nunique()
-        conflict_codes = conflict_counts[conflict_counts > 1].index.tolist()
-        if conflict_codes:
-            wumei_barcode_conflict_samples = " | ".join(conflict_codes[:10])
-
-    if code_to_national_map.empty:
-        wumei_barcode_map_fallback = int(len(inv_df))
-        return inv_df, wumei_barcode_map_hits, wumei_barcode_map_fallback, wumei_barcode_map_conflicts, wumei_barcode_conflict_samples
-
-    inv_df = inv_df.merge(
-        code_to_national_map,
-        left_on="barcode",
-        right_on="product_code",
-        how="left",
-    )
-    mapped_mask = inv_df["national_barcode_mapped"].notna()
-    wumei_barcode_map_hits = int(mapped_mask.sum())
-    wumei_barcode_map_fallback = int((~mapped_mask).sum())
-    inv_df.loc[mapped_mask, "barcode"] = inv_df.loc[mapped_mask, "national_barcode_mapped"]
-    inv_df = inv_df.drop(columns=["product_code", "national_barcode_mapped"])
-    return inv_df, wumei_barcode_map_hits, wumei_barcode_map_fallback, wumei_barcode_map_conflicts, wumei_barcode_conflict_samples
+    return inv_df, 0, 0, 0, ""
 
 
 def _apply_recommendation_columns(detail: pd.DataFrame, low_days: float, high_days: float) -> pd.DataFrame:
@@ -318,6 +310,72 @@ def _apply_recommendation_columns(detail: pd.DataFrame, low_days: float, high_da
     return detail
 
 
+def _join_unique_text(series: pd.Series) -> str:
+    values: list[str] = []
+    for value in series:
+        text = str(value).strip()
+        if text == "" or text.lower() in {"nan", "none"}:
+            continue
+        if text not in values:
+            values.append(text)
+    return " / ".join(values)
+
+
+def _has_non_empty_text(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip() != ""
+
+
+def _build_product_code_catalog(sales_df: pd.DataFrame, inv_df: pd.DataFrame) -> pd.DataFrame:
+    sales_base = sales_df[["product_code", "brand", "product"]].copy()
+    sales_base["product_code"] = sales_base["product_code"].apply(core_io.normalize_barcode_value)
+    sales_base = sales_base.dropna(subset=["product_code"])
+    sales_grouped = (
+        sales_base.groupby("product_code", as_index=False)
+        .agg(
+            sales_brand=("brand", _join_unique_text),
+            sales_product_name=("product", _join_unique_text),
+        )
+    )
+
+    inv_base = inv_df[["product_code", "brand", "product"]].copy()
+    inv_base["product_code"] = inv_base["product_code"].apply(core_io.normalize_barcode_value)
+    inv_base = inv_base.dropna(subset=["product_code"])
+    inv_grouped = (
+        inv_base.groupby("product_code", as_index=False)
+        .agg(
+            inventory_brand=("brand", _join_unique_text),
+            inventory_product_name=("product", _join_unique_text),
+        )
+    )
+
+    catalog = sales_grouped.merge(inv_grouped, on="product_code", how="outer")
+    catalog["brand"] = catalog["sales_brand"].where(
+        catalog["sales_brand"].astype(str).str.strip() != "",
+        catalog["inventory_brand"],
+    )
+    catalog["standard_product_name"] = catalog["sales_product_name"].where(
+        catalog["sales_product_name"].astype(str).str.strip() != "",
+        catalog["inventory_product_name"],
+    )
+    catalog["brand"] = catalog["brand"].fillna("")
+    catalog["standard_product_name"] = catalog["standard_product_name"].fillna("")
+    catalog["sales_product_name"] = catalog["sales_product_name"].fillna("")
+    catalog["inventory_product_name"] = catalog["inventory_product_name"].fillna("")
+    sales_exists = _has_non_empty_text(catalog["sales_product_name"])
+    inventory_exists = _has_non_empty_text(catalog["inventory_product_name"])
+    catalog["source_status"] = "仅库存表"
+    catalog.loc[sales_exists & ~inventory_exists, "source_status"] = "仅销售表"
+    catalog.loc[sales_exists & inventory_exists, "source_status"] = "两表均存在"
+    return catalog[[
+        "product_code",
+        "brand",
+        "standard_product_name",
+        "sales_product_name",
+        "inventory_product_name",
+        "source_status",
+    ]].sort_values(["product_code"]).reset_index(drop=True)
+
+
 def _build_summary_frame(detail_out: pd.DataFrame, out_of_stock_out: pd.DataFrame, missing_sku_out: pd.DataFrame, detail: pd.DataFrame) -> pd.DataFrame:
     summary_rows = [
         ["风险等级-高", int((detail_out["风险等级"] == "高").sum())],
@@ -331,6 +389,14 @@ def _build_summary_frame(detail_out: pd.DataFrame, out_of_stock_out: pd.DataFram
         ["预测平均日销总量(季节模式后)", round(float(detail["forecast_daily_sales"].sum()), 1)],
     ]
     return pd.DataFrame(summary_rows, columns=["指标", "数值"])
+
+
+def _build_executive_overview_frame(summary_out: pd.DataFrame, status_out: pd.DataFrame) -> pd.DataFrame:
+    summary_section = summary_out.copy()
+    summary_section.insert(0, "分组", "核心指标")
+    status_section = status_out.rename(columns={"状态项": "指标", "值": "数值"}).copy()
+    status_section.insert(0, "分组", "运行状态")
+    return pd.concat([summary_section, status_section], ignore_index=True)
 
 
 def _build_status_frame(
@@ -381,23 +447,13 @@ def _build_status_frame(
         ["库存数量解析失败行数", int(invalid_inventory_qty_rows)],
         ["建议补货清单缺失装箱因子行数", int((replenish_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in replenish_out.columns else 0],
         ["建议调货清单缺失装箱因子行数", int((transfer_out["装箱数（因子）"].isna()).sum()) if "装箱数（因子）" in transfer_out.columns else 0],
-        ["同店同条码重复键数", int(mapping_stats.get("duplicate_store_barcode_keys", 0))],
+        ["同店同商品编码重复键数", int(mapping_stats.get("duplicate_store_product_keys", 0))],
         ["名称冲突键数", int(mapping_stats.get("name_conflict_keys", 0))],
         ["品牌冲突键数", int(mapping_stats.get("brand_conflict_keys", 0))],
         ["映射覆盖率", f"{float(mapping_stats.get('mapping_coverage_rate', 0.0)) * 100:.1f}%"],
         ["窗口数据状态", "正常" if (has_mtd_window_data and has_recent_window_data) else f"警告: 3M+MTD有效={has_mtd_window_data}, 30天有效={has_recent_window_data}"],
         ["自动扫描忽略销售文件数", len(ignored_sales_files)],
     ]
-    if is_wumei_system:
-        status_rows.extend(
-            [
-                ["物美条码映射命中行数", wumei_barcode_map_hits],
-                ["物美条码映射回退行数", wumei_barcode_map_fallback],
-                ["物美条码映射冲突编码数", wumei_barcode_map_conflicts],
-            ]
-        )
-        if wumei_barcode_conflict_samples:
-            status_rows.append(["物美条码映射冲突编码样例", wumei_barcode_conflict_samples])
     if ignored_sales_files:
         status_rows.append(["自动扫描忽略销售文件", core_io.format_ignored_sales_files(ignored_sales_files)])
     if missing_sales_files:
@@ -534,6 +590,7 @@ def generate_report_for_system(
         inventory_date_ts=inventory_date_ts,
         mtd_days=mtd_days,
         recent_days_effective=recent_days_effective,
+        recent_days_natural=recent_days,
         has_mtd_window_data=has_mtd_window_data,
         has_recent_window_data=has_recent_window_data,
         use_peak_mode=use_peak_mode,
@@ -542,6 +599,7 @@ def generate_report_for_system(
         is_wumei_system=is_wumei_system,
         province_mapper=map_province_by_supplier_card,
     )
+    product_code_catalog = _build_product_code_catalog(sales_df, inv_df)
     detail = _apply_recommendation_columns(detail, low_days, high_days)
 
     frames = core_output_tables.build_report_frames(
@@ -549,6 +607,7 @@ def generate_report_for_system(
         missing_sales=missing_sales,
         store_summary=store_summary,
         brand_summary=brand_summary,
+        product_code_catalog=product_code_catalog,
         carton_factor_df=carton_factor_df,
         is_wumei_system=is_wumei_system,
         enable_province_column=enable_province_column,
@@ -589,9 +648,11 @@ def generate_report_for_system(
         wumei_barcode_conflict_samples=wumei_barcode_conflict_samples,
     )
 
-    sheets = dict(frames)
-    sheets["汇总"] = summary_out
-    sheets["运行状态"] = status_out
+    executive_overview_out = _build_executive_overview_frame(summary_out, status_out)
+
+    sheets = {name: frame for name, frame in frames.items() if name != "商品编码对照清单"}
+    sheets["运行总览"] = executive_overview_out
+    sheets["商品编码对照清单"] = frames["商品编码对照清单"]
 
     try:
         core_report_writer.write_report_with_style(
