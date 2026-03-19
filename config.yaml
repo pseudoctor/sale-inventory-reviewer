@@ -1,10 +1,16 @@
 run_mode: "batch" # single: 单系统; batch: 多系统批量
+display_name: "陕西华润"
 raw_data_dir: "./raw_data"
 output_file: "./reports/inventory_risk_report.xlsx"
 
-sales_files: []
+sales_files:
+  - "陕西华润销售202511.xlsx"
+  - "陕西华润销售202512.xlsx"
+  - "陕西华润销售202601.xlsx"
+  - "陕西华润销售202602.xlsx"
+  - "陕西华润销售202603.xlsx"
 
-inventory_file: ""
+inventory_file: "陕西华润库存.xlsx"
 
 risk_days_high: 60
 risk_days_low: 45
