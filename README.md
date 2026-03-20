@@ -22,6 +22,20 @@ Required columns in inventory file:
 - Single mode: one report (default: `reports/inventory_risk_report.xlsx`)
 - Batch mode: one report per system + `reports/batch_run_summary.xlsx`
 
+## Report Preview
+
+Add two screenshot previews under `docs/images/` so GitHub readers can see the report layout at a glance:
+
+| Summary View | Detail View |
+| --- | --- |
+| ![Report summary preview](docs/images/report-summary.png) | ![Report detail preview](docs/images/report-detail.png) |
+
+Recommended screenshot targets:
+- `docs/images/report-summary.png`: `汇总` or `门店汇总`
+- `docs/images/report-detail.png`: `明细` or `建议补货清单`
+
+Use masked or sample data only. Do not upload screenshots containing real sensitive business data.
+
 Report filename policy:
 - Auto naming (when `output_file` is empty or legacy default): `<系统名><库存日期>库存预警.xlsx`
   - Example: `陕西华润20260208库存预警.xlsx`
