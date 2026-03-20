@@ -38,6 +38,7 @@ temp/
 .cache/
 
 .DS_Store
+data/
 raw_data/
 reports/
 venv/
