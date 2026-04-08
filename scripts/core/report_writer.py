@@ -173,6 +173,7 @@ def _style_data_rows(
     risk_fills: Dict[str, PatternFill],
     out_of_stock_fill: PatternFill,
     band_fill: PatternFill,
+    transfer_qty_fill: PatternFill,
 ) -> Dict[str, int]:
     """统一处理数据行样式、数字格式和条件高亮。"""
     header_to_idx = {name: idx + 1 for idx, name in enumerate(headers)}
@@ -226,6 +227,14 @@ def _style_data_rows(
                         fill_type="solid",
                     )
                     row[replenish_idx - 1].font = Font(color="9A3412", bold=True)
+
+        transfer_qty_idx = header_to_idx.get("调货数量")
+        if transfer_qty_idx is not None and ws.title == "门店销量排名调货汇总":
+            transfer_qty_cell = row[transfer_qty_idx - 1]
+            transfer_qty_value = pd.to_numeric(transfer_qty_cell.value, errors="coerce")
+            if pd.notna(transfer_qty_value) and float(transfer_qty_value) > 0:
+                transfer_qty_cell.fill = transfer_qty_fill
+                transfer_qty_cell.font = Font(color="9A3412", bold=True)
         ws.row_dimensions[row[0].row].height = _estimate_row_height(ws, row[0].row, wrap_columns)
     return header_to_idx
 
@@ -293,6 +302,7 @@ def write_report_with_style(
     }
     out_of_stock_fill = PatternFill(start_color="EF4444", end_color="EF4444", fill_type="solid")
     band_fill = PatternFill(start_color="FAFCFE", end_color="FAFCFE", fill_type="solid")
+    transfer_qty_fill = PatternFill(start_color="FED7AA", end_color="FED7AA", fill_type="solid")
 
     for sheet_name in sheets.keys():
         ws = wb[sheet_name]
@@ -302,7 +312,16 @@ def write_report_with_style(
         _set_freeze_and_filter(ws, sheet_name)
         headers = _style_headers(ws, header_fill, header_font, center)
         _apply_column_widths(ws)
-        header_to_idx = _style_data_rows(ws, headers, left, center, risk_fills, out_of_stock_fill, band_fill)
+        header_to_idx = _style_data_rows(
+            ws,
+            headers,
+            left,
+            center,
+            risk_fills,
+            out_of_stock_fill,
+            band_fill,
+            transfer_qty_fill,
+        )
         if sheet_name == "运行总览":
             _apply_overview_metric_format(ws, header_to_idx)
 
