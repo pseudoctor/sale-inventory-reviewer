@@ -78,6 +78,30 @@ def _set_sheet_title(ws, display_name: str, inventory_date: str, center: Alignme
     ws.cell(row=1, column=1).alignment = center
 
 
+def _resolve_preferred_width(header: object) -> float | None:
+    """按固定列名或前缀规则解析列宽。"""
+    header_text = str(header)
+    if header_text in PREFERRED_WIDTHS:
+        return PREFERRED_WIDTHS[header_text]
+    if header_text.startswith("门店销售额总计("):
+        return PREFERRED_WIDTHS["门店销售额总计"]
+    if header_text.startswith("商品销售额("):
+        return PREFERRED_WIDTHS["商品销售额"]
+    return None
+
+
+def _resolve_number_format(header: object) -> str | None:
+    """按固定列名或前缀规则解析数字格式。"""
+    header_text = str(header)
+    if header_text in NUMBER_FORMATS:
+        return NUMBER_FORMATS[header_text]
+    if header_text.startswith("门店销售额总计("):
+        return NUMBER_FORMATS["门店销售额总计"]
+    if header_text.startswith("商品销售额("):
+        return NUMBER_FORMATS["商品销售额"]
+    return None
+
+
 def _set_freeze_and_filter(ws, sheet_name: str) -> None:
     """设置冻结窗格与筛选范围。"""
     if sheet_name == "使用说明":
@@ -110,8 +134,9 @@ def _apply_column_widths(ws) -> None:
                 continue
             max_len = max(max_len, len(str(cell.value)))
         auto_width = max_len + 2
-        if header in PREFERRED_WIDTHS:
-            ws.column_dimensions[col_letter].width = max(PREFERRED_WIDTHS[header], min(auto_width, 40))
+        preferred_width = _resolve_preferred_width(header)
+        if preferred_width is not None:
+            ws.column_dimensions[col_letter].width = max(preferred_width, min(auto_width, 40))
         else:
             ws.column_dimensions[col_letter].width = min(auto_width, 40)
 
@@ -161,8 +186,9 @@ def _style_data_rows(
                 cell.alignment = center
             else:
                 cell.alignment = left
-            if header in NUMBER_FORMATS:
-                cell.number_format = NUMBER_FORMATS[header]
+            resolved_number_format = _resolve_number_format(header)
+            if resolved_number_format is not None:
+                cell.number_format = resolved_number_format
             if ws.title != "使用说明" and row[0].row % 2 == 1:
                 cell.fill = band_fill
 

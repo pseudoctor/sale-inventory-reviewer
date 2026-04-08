@@ -335,6 +335,7 @@ class CoreCalculationsTest(unittest.TestCase):
 
     def test_find_sales_amount_column_supports_common_variants(self):
         self.assertEqual(core_io.find_sales_amount_column(["销售金额", "其他列"]), "销售金额")
+        self.assertEqual(core_io.find_sales_amount_column(["含税销售金额/元", "其他列"]), "含税销售金额/元")
         self.assertEqual(core_io.find_sales_amount_column(["含税销售额/元", "其他列"]), "含税销售额/元")
         self.assertIsNone(core_io.find_sales_amount_column(["销售数量", "其他列"]))
 
@@ -678,10 +679,16 @@ class CoreCalculationsTest(unittest.TestCase):
             }
         )
 
-        out = core_pipeline._build_store_sales_ranking_transfer_frame(detail, sales_df)
+        out = core_pipeline._build_store_sales_ranking_transfer_frame(
+            detail,
+            sales_df,
+            pd.Timestamp("2026-02-01"),
+            pd.Timestamp("2026-02-02"),
+            "2026-02-01至2026-02-02",
+        )
 
-        self.assertEqual(out["门店销售额总计"].tolist(), [150.0, 150.0])
-        self.assertEqual(out["商品销售额"].tolist(), [100.0, 50.0])
+        self.assertEqual(out["门店销售额总计(2026-02-01至2026-02-02)"].tolist(), [150.0, 150.0])
+        self.assertEqual(out["商品销售额(2026-02-01至2026-02-02)"].tolist(), [100.0, 50.0])
         self.assertEqual(out["调货数量"].tolist(), [10, 6])
         self.assertEqual(out["排名"].tolist(), [1, 1])
 

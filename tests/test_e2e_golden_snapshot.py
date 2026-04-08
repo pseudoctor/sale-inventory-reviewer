@@ -766,10 +766,12 @@ def test_report_includes_store_sales_ranking_transfer_sheet(tmp_path: Path):
 
     generate_report_for_system(config, config)
     ranking_sheet = pd.read_excel(output_file, sheet_name="门店销量排名调货汇总", header=1)
+    store_amount_col = "门店销售额总计(2025-11-01至2026-02-09)"
+    item_amount_col = "商品销售额(2025-11-01至2026-02-09)"
     assert ranking_sheet["门店名称"].tolist() == ["门店B", "门店A"]
     assert ranking_sheet["排名"].tolist() == [1, 2]
-    assert ranking_sheet["门店销售额总计"].tolist() == [300.0, 150.0]
-    assert ranking_sheet["商品销售额"].tolist() == [300.0, 100.0]
+    assert ranking_sheet[store_amount_col].tolist() == [300.0, 150.0]
+    assert ranking_sheet[item_amount_col].tolist() == [300.0, 100.0]
     assert ranking_sheet["调货数量"].tolist() == [40, 8]
 
 

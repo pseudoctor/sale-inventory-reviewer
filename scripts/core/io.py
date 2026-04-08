@@ -239,6 +239,7 @@ def find_sales_amount_column(columns: List[str]) -> Optional[str]:
         columns,
         [
             "销售金额",
+            "含税销售金额/元",
             "含税销售额/元",
             "销售额",
             "sales_amount",

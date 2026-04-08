@@ -202,9 +202,19 @@ def _load_sales_data(
     return sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows, invalid_sales_qty_rows
 
 
-def _build_store_sales_ranking_transfer_frame(detail: pd.DataFrame, sales_df: pd.DataFrame) -> pd.DataFrame:
-    """基于当前明细和销售额，生成门店销量排名调货汇总页。"""
-    sales_base = sales_df.copy()
+def _build_store_sales_ranking_transfer_frame(
+    detail: pd.DataFrame,
+    sales_df: pd.DataFrame,
+    sales_amount_start: pd.Timestamp,
+    sales_amount_end: pd.Timestamp,
+    sales_amount_range_label: str,
+) -> pd.DataFrame:
+    """基于当前明细和销售额，生成带时间区间的门店销量排名调货汇总页。"""
+    store_amount_header = f"门店销售额总计({sales_amount_range_label})"
+    item_amount_header = f"商品销售额({sales_amount_range_label})"
+    sales_base = sales_df[
+        (sales_df["sales_date"] >= sales_amount_start) & (sales_df["sales_date"] <= sales_amount_end)
+    ].copy()
     sales_base["store_key"] = sales_base.get("store_code", pd.Series(index=sales_base.index)).apply(core_io.normalize_barcode_value)
     sales_base["store_key"] = sales_base["store_key"].where(sales_base["store_key"].notna(), sales_base["store"])
     sales_base["product_key"] = sales_base.get("product_code", pd.Series(index=sales_base.index)).apply(core_io.normalize_barcode_value)
@@ -266,15 +276,15 @@ def _build_store_sales_ranking_transfer_frame(detail: pd.DataFrame, sales_df: pd
     transfer["调货数量"] = pd.to_numeric(transfer["ranking_transfer_qty"], errors="coerce").fillna(0).astype(int)
 
     transfer_out = transfer.rename(
-        columns={
-            "store": "门店名称",
-            "store_sales_amount": "门店销售额总计",
-            "brand": "品牌",
-            "product": "商品名称",
-            "item_sales_amount": "商品销售额",
-            "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
-            "daily_sales_30d": "近30天平均日销售",
-            "inventory_qty": "库存数量",
+            columns={
+                "store": "门店名称",
+            "store_sales_amount": store_amount_header,
+                "brand": "品牌",
+                "product": "商品名称",
+            "item_sales_amount": item_amount_header,
+                "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
+                "daily_sales_30d": "近30天平均日销售",
+                "inventory_qty": "库存数量",
             "out_of_stock": "缺货",
             "risk_level": "风险等级",
             "turnover_days": "库存周转天数",
@@ -283,11 +293,11 @@ def _build_store_sales_ranking_transfer_frame(detail: pd.DataFrame, sales_df: pd
         [
             "排名",
             "门店名称",
-            "门店销售额总计",
+            store_amount_header,
             "品牌",
             "商品条码",
             "商品名称",
-            "商品销售额",
+            item_amount_header,
             "调货数量",
             "近三月+本月迄今平均日销",
             "近30天平均日销售",
@@ -297,6 +307,9 @@ def _build_store_sales_ranking_transfer_frame(detail: pd.DataFrame, sales_df: pd
             "库存周转天数",
         ]
     ]
+    # 销售额在该汇总页只保留 1 位小数，满足业务展示要求。
+    transfer_out[store_amount_header] = pd.to_numeric(transfer_out[store_amount_header], errors="coerce").round(1)
+    transfer_out[item_amount_header] = pd.to_numeric(transfer_out[item_amount_header], errors="coerce").round(1)
     return transfer_out.sort_values(
         ["排名", "门店名称", "品牌", "商品名称", "商品条码"],
         ascending=[True, True, True, True, True],
@@ -771,8 +784,15 @@ def generate_report_for_system(
         stagnant_outbound_mode,
         stagnant_min_keep_qty,
     )
+    sales_amount_range_label = f"{mtd_start.date().isoformat()}至{inventory_date_ts.date().isoformat()}"
     store_sales_ranking_transfer_out = (
-        _build_store_sales_ranking_transfer_frame(detail, sales_df)
+        _build_store_sales_ranking_transfer_frame(
+            detail,
+            sales_df,
+            mtd_start,
+            inventory_date_ts,
+            sales_amount_range_label,
+        )
         if enable_ranked_store_transfer_summary
         else pd.DataFrame()
     )
