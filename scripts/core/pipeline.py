@@ -100,6 +100,7 @@ def _load_sales_data(
     brand_keywords: List[str],
     sales_date_format: str,
     sales_date_dayfirst: bool,
+    require_sales_amount: bool,
 ) -> tuple[pd.DataFrame, int, List[str], int, int]:
     """读取并标准化全部销售文件，返回合并后的销售明细与质量统计。"""
     sales_data: List[pd.DataFrame] = []
@@ -117,6 +118,12 @@ def _load_sales_data(
         df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col = core_io.normalize_sales_df(df)
         store_code_col = core_io.find_column(df.columns.tolist(), ["门店编码", "store_code"])
         sales_amount_col = core_io.find_sales_amount_column(df.columns.tolist())
+        # 门店销量排名调货汇总依赖销售额口径，启用该功能时缺失直接失败，避免静默生成错误结果。
+        if require_sales_amount and sales_amount_col is None:
+            raise ValueError(
+                f"Missing required sales amount column in sales file: {filepath.name} "
+                "(expected one of: 销售金额, 含税销售额/元, 销售额)"
+            )
         invalid_sales_qty_rows += int(df.attrs.get("invalid_qty_rows", 0))
 
         national_barcode_col = core_io.find_column(df.columns.tolist(), ["国条码"])
@@ -172,7 +179,6 @@ def _load_sales_data(
             sales_amount_series, _ = core_io.normalize_numeric_series(df["sales_amount"])
             df["sales_amount"] = sales_amount_series
         else:
-            # 兼容仅提供销量、不提供销售额的输入文件，金额汇总缺失时按 0 处理。
             df["sales_amount"] = 0.0
         df = core_io.ensure_sales_brand_column(df, brand_keywords)
 
@@ -684,6 +690,7 @@ def generate_report_for_system(
     use_peak_mode = _parse_season_mode(config.get("season_mode", False))
     fail_on_empty_window = bool(config.get("fail_on_empty_window", False))
     merge_detail_store_cells = bool(config.get("merge_detail_store_cells", True))
+    enable_ranked_store_transfer_summary = bool(config.get("enable_ranked_store_transfer_summary", False))
 
     try:
         sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows, invalid_sales_qty_rows = _load_sales_data(
@@ -691,6 +698,7 @@ def generate_report_for_system(
             brand_keywords,
             sales_date_format,
             sales_date_dayfirst,
+            enable_ranked_store_transfer_summary,
         )
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, RuntimeError) and str(exc).startswith("[input_read]"):
@@ -763,7 +771,11 @@ def generate_report_for_system(
         stagnant_outbound_mode,
         stagnant_min_keep_qty,
     )
-    store_sales_ranking_transfer_out = _build_store_sales_ranking_transfer_frame(detail, sales_df)
+    store_sales_ranking_transfer_out = (
+        _build_store_sales_ranking_transfer_frame(detail, sales_df)
+        if enable_ranked_store_transfer_summary
+        else pd.DataFrame()
+    )
 
     frames = core_output_tables.build_report_frames(
         detail=detail,
@@ -816,7 +828,8 @@ def generate_report_for_system(
     sheets = {
         **{name: frame for name, frame in frames.items() if name not in {"使用说明", "商品编码对照清单"}},
     }
-    sheets["门店销量排名调货汇总"] = store_sales_ranking_transfer_out
+    if enable_ranked_store_transfer_summary:
+        sheets["门店销量排名调货汇总"] = store_sales_ranking_transfer_out
     sheets["运行总览"] = executive_overview_out
     sheets["使用说明"] = frames["使用说明"]
     sheets["商品编码对照清单"] = frames["商品编码对照清单"]

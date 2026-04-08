@@ -756,6 +756,7 @@ def test_report_includes_store_sales_ranking_transfer_sheet(tmp_path: Path):
         "sales_window_recent_days": 30,
         "season_mode": False,
         "strict_auto_scan": False,
+        "enable_ranked_store_transfer_summary": True,
         "merge_detail_store_cells": True,
         "brand_keywords": ["品牌T"],
         "sales_date_dayfirst": False,
@@ -770,6 +771,81 @@ def test_report_includes_store_sales_ranking_transfer_sheet(tmp_path: Path):
     assert ranking_sheet["门店销售额总计"].tolist() == [300.0, 150.0]
     assert ranking_sheet["商品销售额"].tolist() == [300.0, 100.0]
     assert ranking_sheet["调货数量"].tolist() == [40, 8]
+
+
+def test_report_fails_when_sales_amount_column_missing(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌T"],
+                "商品名称": ["SKU1"],
+                "商品条码": ["6902111111111"],
+                "销售数量": [10],
+                "销售时间": ["2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌T"],
+                "商品名称": ["SKU1"],
+                "商品条码": ["6902111111111"],
+                "库存数量": [8],
+                "库存日期": ["2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6902111111111"],
+                "商品名称": ["SKU1"],
+                "装箱数（因子）": [6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "enable_ranked_store_transfer_summary": True,
+        "brand_keywords": ["品牌T"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    try:
+        generate_report_for_system(config, config)
+        assert False, "expected generate_report_for_system to fail"
+    except Exception as exc:  # noqa: BLE001
+        assert "sales amount column" in str(exc)
 
 
 def test_sales_supplier_fallback_handles_duplicate_store_barcode(tmp_path: Path):

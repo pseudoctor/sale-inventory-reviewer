@@ -75,6 +75,37 @@ def _needs_xls_support(config: dict, raw_data_dir: Path) -> bool:
     return False
 
 
+def _resolve_config_path(path_value: object) -> Path | None:
+    """将配置中的路径解析为绝对路径，空值返回 None。"""
+    if not isinstance(path_value, str) or not path_value.strip():
+        return None
+    path = Path(path_value.strip())
+    if not path.is_absolute():
+        path = (BASE_DIR / path).resolve()
+    return path
+
+
+def _check_sales_amount_columns(sales_files: list[Path]) -> list[str]:
+    """校验销售文件是否包含门店销量排名调货汇总所需的销售额列。"""
+    errors: list[str] = []
+    for sales_file in sales_files:
+        if not sales_file.exists():
+            continue
+        try:
+            sales_df = core_io.read_excel_first_sheet(sales_file)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"failed to read sales file for amount-column check: {sales_file.name}: {exc}")
+            continue
+        sales_df.columns = sales_df.columns.astype(str).str.strip()
+        sales_amount_col = core_io.find_sales_amount_column(sales_df.columns.tolist())
+        if sales_amount_col is None:
+            errors.append(
+                f"sales file missing sales amount column: {sales_file.name} "
+                "(expected one of: 销售金额, 含税销售额/元, 销售额)"
+            )
+    return errors
+
+
 def _check_config_and_paths() -> list[str]:
     errors: list[str] = []
     try:
@@ -136,10 +167,22 @@ def _check_config_and_paths() -> list[str]:
                     errors.append(
                         f"batch.systems[{idx}] '{merged['display_name']}' missing sales files: {', '.join(missing_sales)}"
                     )
+                if bool(merged.get("enable_ranked_store_transfer_summary", False)):
+                    errors.extend(
+                        [
+                            f"batch.systems[{idx}] '{merged['display_name']}' {msg}"
+                            for msg in _check_sales_amount_columns(sales_files)
+                        ]
+                    )
                 inv = system_raw / merged["inventory_file"]
                 if not inv.exists():
                     errors.append(
                         f"batch.systems[{idx}] '{merged['display_name']}' missing inventory file: {inv.name}"
+                    )
+                carton_factor = _resolve_config_path(merged.get("carton_factor_file"))
+                if carton_factor is None or not carton_factor.exists():
+                    errors.append(
+                        f"batch.systems[{idx}] '{merged['display_name']}' missing carton factor file: {merged.get('carton_factor_file')}"
                     )
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"batch.systems[{idx}] preflight failed: {exc}")
@@ -147,11 +190,16 @@ def _check_config_and_paths() -> list[str]:
         inv = raw_data_dir / str(config.get("inventory_file", ""))
         if not inv.exists():
             errors.append(f"inventory file not found: {inv}")
+        carton_factor = _resolve_config_path(config.get("carton_factor_file"))
+        if carton_factor is None or not carton_factor.exists():
+            errors.append(f"carton factor file not found: {carton_factor or config.get('carton_factor_file')}")
         configured_sales = config.get("sales_files", [])
         sales = [raw_data_dir / name for name in configured_sales]
         missing_sales = [str(p.name) for p in sales if not p.exists()]
         if missing_sales:
             errors.append(f"missing sales files: {', '.join(missing_sales)}")
+        if bool(config.get("enable_ranked_store_transfer_summary", False)):
+            errors.extend(_check_sales_amount_columns(sales))
         if not configured_sales:
             try:
                 candidates = core_io.resolve_sales_candidates(raw_data_dir, [])

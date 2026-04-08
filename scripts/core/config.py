@@ -31,6 +31,10 @@ DEFAULT_CONFIG = {
     "season_mode": False,
     "fail_on_empty_window": False,
     "strict_auto_scan": False,
+    "merge_detail_store_cells": True,
+    "enable_ranked_store_transfer_summary": False,
+    "stagnant_outbound_mode": "keep_safety_stock",
+    "stagnant_min_keep_qty": 0,
     "carton_factor_file": "./data/sku装箱数.xlsx",
     "brand_keywords": [],
     "batch": {
@@ -43,6 +47,7 @@ DEFAULT_CONFIG = {
 
 
 def _validate_bool_field(config: Dict[str, Any], key: str, default: bool, error_message: str) -> bool:
+    """校验布尔配置项，非法时抛出明确错误。"""
     value = config.get(key, default)
     if not isinstance(value, bool):
         raise ValueError(error_message)
@@ -50,6 +55,7 @@ def _validate_bool_field(config: Dict[str, Any], key: str, default: bool, error_
 
 
 def _normalize_sales_file_entries(entries: list[str], field_name: str) -> list[str]:
+    """限制销售文件列表只能使用 raw_data_dir 下的相对路径。"""
     normalized: list[str] = []
     seen: set[str] = set()
     for raw in entries:
@@ -67,6 +73,7 @@ def _normalize_sales_file_entries(entries: list[str], field_name: str) -> list[s
 
 
 def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """校验并规范化主配置，供单系统和批量模式共用。"""
     run_mode = str(config.get("run_mode", "single")).strip().lower()
     if run_mode not in {"single", "batch"}:
         raise ValueError("config.run_mode must be one of: single, batch.")
@@ -132,6 +139,26 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
     _validate_bool_field(config, "fail_on_empty_window", False, "fail_on_empty_window must be true/false.")
     _validate_bool_field(config, "strict_auto_scan", False, "strict_auto_scan must be true/false.")
+    _validate_bool_field(
+        config,
+        "merge_detail_store_cells",
+        True,
+        "merge_detail_store_cells must be true/false.",
+    )
+    _validate_bool_field(
+        config,
+        "enable_ranked_store_transfer_summary",
+        False,
+        "enable_ranked_store_transfer_summary must be true/false.",
+    )
+    stagnant_outbound_mode = str(config.get("stagnant_outbound_mode", "keep_safety_stock")).strip().lower()
+    if stagnant_outbound_mode not in {"keep_safety_stock", "all_outbound"}:
+        raise ValueError("stagnant_outbound_mode must be one of: keep_safety_stock, all_outbound.")
+    config["stagnant_outbound_mode"] = stagnant_outbound_mode
+    stagnant_min_keep_qty = float(config.get("stagnant_min_keep_qty", 0))
+    if stagnant_min_keep_qty < 0:
+        raise ValueError("stagnant_min_keep_qty must be >= 0.")
+    config["stagnant_min_keep_qty"] = stagnant_min_keep_qty
 
     brand_keywords = config.get("brand_keywords")
     if not isinstance(brand_keywords, list):
@@ -164,6 +191,7 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
+    """校验批量模式下每个系统的关键配置约束。"""
     batch_cfg = config.get("batch", {})
     systems = batch_cfg.get("systems", [])
     if not systems:
@@ -222,6 +250,7 @@ def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
 
 
 def build_system_config(system_cfg: Dict[str, Any], global_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """将全局配置与单个系统配置合并为最终运行配置。"""
     merged = dict(global_cfg)
     merged["enabled"] = bool(system_cfg.get("enabled", True))
     merged["sales_files"] = list(system_cfg["sales_files"])
@@ -245,6 +274,7 @@ def build_system_config(system_cfg: Dict[str, Any], global_cfg: Dict[str, Any]) 
 
 
 def load_config(config_path: Path) -> Dict[str, Any]:
+    """从 YAML 读取配置并套用默认值。"""
     config = deepcopy(DEFAULT_CONFIG)
     if config_path.exists():
         with open(config_path, "r", encoding="utf-8") as f:

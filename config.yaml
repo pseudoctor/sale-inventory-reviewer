@@ -9,7 +9,7 @@ sales_files:
   - "陕西华润销售202601.xlsx"
   - "陕西华润销售202602.xlsx"
   - "陕西华润销售202603.xlsx"
-
+  - "陕西华润销售202604.xlsx"
 inventory_file: "陕西华润库存.xlsx"
 
 risk_days_high: 60
@@ -22,6 +22,10 @@ sales_date_format: ""
 season_mode: false # false: 淡季取低(min), true: 旺季取高(max)
 fail_on_empty_window: false
 strict_auto_scan: false # true: 自动扫描模式下若候选为空且存在疑似销售文件则直接报错
+merge_detail_store_cells: false # true: 明细sheet按连续门店名称合并单元格; false: 不合并
+enable_ranked_store_transfer_summary: true # true: 生成门店销量排名调货汇总sheet，并强制要求销售文件包含销售额列
+stagnant_outbound_mode: "all_outbound" # keep_safety_stock: 保留安全库存; all_outbound: 全部调出
+stagnant_min_keep_qty: 0 # 仅在 keep_safety_stock 模式下生效，表示零销量积压SKU保留库存
 carton_factor_file: "./data/sku装箱数.xlsx"
 province_column_enabled: false
 
@@ -54,8 +58,8 @@ batch:
       province_column_enabled: true
       data_subdir: "宁夏物美"
       sales_files:
-        - "物美销售202602.xls"
-        - "物美销售202603.xls"
+        - "物美销售202601-202603.xls"
+        - "物美销售202604.xls"
       inventory_file: "物美库存.xls"
       carton_factor_file: "./data/sku装箱数.xlsx"
     - enabled: true
@@ -68,13 +72,15 @@ batch:
         - "陕西华润销售202601.xlsx"
         - "陕西华润销售202602.xlsx"
         - "陕西华润销售202603.xlsx"
+        - "陕西华润销售202604.xlsx"
       inventory_file: "陕西华润库存.xlsx"
     - enabled: true
       system_id: "gansu_huarun"
       display_name: "甘肃华润"
       data_subdir: "甘肃华润"
       sales_files:
-        - "甘肃华润销售202601.xlsx"
-        - "甘肃华润销售202602.xlsx"
-        - "甘肃华润销售202603.xlsx"
-      inventory_file: "甘肃华润库存.xlsx"
+        - "甘宁华润销售202601.xlsx"
+        - "甘宁华润销售202602.xlsx"
+        - "甘宁华润销售202603.xlsx"
+        - "甘宁华润销售202604.xlsx"
+      inventory_file: "甘宁华润库存.xlsx"

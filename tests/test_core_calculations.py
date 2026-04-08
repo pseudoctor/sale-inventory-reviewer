@@ -333,6 +333,11 @@ class CoreCalculationsTest(unittest.TestCase):
         _, _, _, _, barcode_col, _, _, _ = core_io.normalize_sales_df(df)
         self.assertEqual(barcode_col, "国条码")
 
+    def test_find_sales_amount_column_supports_common_variants(self):
+        self.assertEqual(core_io.find_sales_amount_column(["销售金额", "其他列"]), "销售金额")
+        self.assertEqual(core_io.find_sales_amount_column(["含税销售额/元", "其他列"]), "含税销售额/元")
+        self.assertIsNone(core_io.find_sales_amount_column(["销售数量", "其他列"]))
+
     def test_load_carton_factor_cached_hits_loader_once(self):
         core_pipeline._CARTON_FACTOR_CACHE.clear()
         fake_path = Path("/tmp/fake_factor.xlsx")
