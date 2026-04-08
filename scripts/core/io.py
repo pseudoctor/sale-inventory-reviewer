@@ -201,6 +201,7 @@ def build_unambiguous_source_to_target_map(
 
 
 def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[str], str, str, str, str, Optional[str]]:
+    """标准化销售表核心字段，并返回匹配到的列名。"""
     df = df.copy()
     df.columns = df.columns.str.strip()
 
@@ -230,6 +231,20 @@ def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[st
     df[qty_col] = qty_series
     df.attrs["invalid_qty_rows"] = invalid_qty_rows
     return df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col
+
+
+def find_sales_amount_column(columns: List[str]) -> Optional[str]:
+    """识别销售额字段，兼容不同系统导出的常见列名。"""
+    return find_column(
+        columns,
+        [
+            "销售金额",
+            "含税销售额/元",
+            "销售额",
+            "sales_amount",
+            "amount",
+        ],
+    )
 
 
 def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[str], str, str, str, Optional[str]]:

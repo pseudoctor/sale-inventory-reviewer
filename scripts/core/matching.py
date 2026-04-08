@@ -9,6 +9,7 @@ from . import metrics as core_metrics
 
 
 def _prepare_match_keys(df: pd.DataFrame) -> pd.DataFrame:
+    """为销售/库存数据补统一匹配键，优先编码，其次回退到名称条码。"""
     out = df.copy()
     out["store_key"] = out.get("store_code", pd.Series(index=out.index)).apply(core_io.normalize_barcode_value)
     out["product_key"] = out.get("product_code", pd.Series(index=out.index)).apply(core_io.normalize_barcode_value)
@@ -19,6 +20,7 @@ def _prepare_match_keys(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _coalesce_store_column(df: pd.DataFrame) -> pd.DataFrame:
+    """统一 merge 后的门店列名，避免 store_x/store_y 泄漏到下游。"""
     out = df.copy()
     if "store" in out.columns:
         return out
@@ -30,6 +32,7 @@ def _coalesce_store_column(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_sales_key_mapping(sales_df: pd.DataFrame) -> pd.DataFrame:
+    """为每个门店商品键选择稳定的展示名称与品牌。"""
     key_cols = ["store_key", "product_key"]
     sorted_sales = sales_df.copy()
     # Deterministic tie-break for same-day records:
@@ -90,6 +93,7 @@ def build_detail_with_matching(
     is_wumei_system: bool,
     province_mapper: Callable[[str | None], str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float]]:
+    """将销售与库存按统一键匹配，产出明细、缺失SKU与汇总表。"""
     sales_df = _prepare_match_keys(sales_df)
     sales_3m_mtd = sales_df[(sales_df["sales_date"] >= mtd_start) & (sales_df["sales_date"] <= mtd_end)]
     sales_30d = sales_df[(sales_df["sales_date"] >= recent_start) & (sales_df["sales_date"] <= inventory_date_ts)]
@@ -226,7 +230,7 @@ def build_detail_with_matching(
 
     detail = core_metrics.apply_inventory_metrics(detail, low_days, high_days)
     detail = detail[[
-        "store", "brand", "barcode", "barcode_output", "product", "daily_sales_3m_mtd", "daily_sales_30d",
+        "store_key", "product_key", "store", "brand", "barcode", "barcode_output", "product", "daily_sales_3m_mtd", "daily_sales_30d",
         "forecast_daily_sales", "inventory_qty", "supplier_card", "province", "risk_level", "inventory_sales_ratio",
         "turnover_rate", "turnover_days", "name_source_rule", "brand_source_rule",
         "name_conflict_count", "brand_conflict_count",
@@ -279,7 +283,7 @@ def build_detail_with_matching(
             else missing_detail["barcode"]
         )
         missing_detail = missing_detail[[
-            "store", "brand", "barcode", "barcode_output", "product", "daily_sales_3m_mtd", "daily_sales_30d",
+            "store_key", "product_key", "store", "brand", "barcode", "barcode_output", "product", "daily_sales_3m_mtd", "daily_sales_30d",
             "forecast_daily_sales", "inventory_qty", "supplier_card", "province", "risk_level", "inventory_sales_ratio",
             "turnover_rate", "turnover_days", "name_source_rule", "brand_source_rule",
             "name_conflict_count", "brand_conflict_count",

@@ -631,6 +631,55 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(replenish.iloc[0]["建议补货数量"], 1)
         self.assertEqual(replenish.iloc[0]["建议补货箱数"], "1件")
 
+    def test_build_store_sales_ranking_transfer_frame_uses_mtd_zero_for_full_outbound(self):
+        detail = pd.DataFrame(
+            {
+                "store_key": ["S1", "S1"],
+                "product_key": ["P1", "P2"],
+                "store": ["门店A", "门店A"],
+                "brand": ["品牌A", "品牌B"],
+                "barcode": ["6901", "6902"],
+                "barcode_output": ["6901", "6902"],
+                "product": ["SKU1", "SKU2"],
+                "daily_sales_3m_mtd": [0.0, 0.5],
+                "daily_sales_30d": [0.0, 0.1],
+                "forecast_daily_sales": [0.0, 0.5],
+                "inventory_qty": [10, 20],
+                "supplier_card": [None, None],
+                "province": ["其他/未知", "其他/未知"],
+                "risk_level": ["高", "高"],
+                "inventory_sales_ratio": [float("inf"), 40.0],
+                "turnover_rate": [0.0, 0.75],
+                "turnover_days": [float("inf"), 40.0],
+                "name_source_rule": ["latest_sales_name", "latest_sales_name"],
+                "brand_source_rule": ["latest_sales_brand", "latest_sales_brand"],
+                "name_conflict_count": [1, 1],
+                "brand_conflict_count": [1, 1],
+                "out_of_stock": ["否", "否"],
+                "suggest_outbound_qty": [0, 6],
+                "suggest_replenish_qty": [0, 0],
+            }
+        )
+        sales_df = pd.DataFrame(
+            {
+                "store": ["门店A", "门店A"],
+                "store_code": ["S1", "S1"],
+                "product": ["SKU1", "SKU2"],
+                "barcode": ["6901", "6902"],
+                "product_code": ["P1", "P2"],
+                "sales_qty": [0, 5],
+                "sales_amount": [100.0, 50.0],
+                "sales_date": pd.to_datetime(["2026-02-01", "2026-02-02"]),
+            }
+        )
+
+        out = core_pipeline._build_store_sales_ranking_transfer_frame(detail, sales_df)
+
+        self.assertEqual(out["门店销售额总计"].tolist(), [150.0, 150.0])
+        self.assertEqual(out["商品销售额"].tolist(), [100.0, 50.0])
+        self.assertEqual(out["调货数量"].tolist(), [10, 6])
+        self.assertEqual(out["排名"].tolist(), [1, 1])
+
     def test_matching_uses_store_code_product_code_and_latest_name_brand(self):
         sales_df = pd.DataFrame(
             {

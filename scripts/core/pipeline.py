@@ -25,6 +25,7 @@ _CARTON_FACTOR_CACHE: Dict[Path, tuple[Optional[int], pd.DataFrame]] = {}
 
 
 def compute_config_snapshot(config: Dict[str, Any]) -> str:
+    """生成配置快照摘要，用于报表中追踪本次运行口径。"""
     keys = [
         "risk_days_high",
         "risk_days_low",
@@ -33,18 +34,23 @@ def compute_config_snapshot(config: Dict[str, Any]) -> str:
         "sales_window_recent_days",
         "season_mode",
         "strict_auto_scan",
+        "merge_detail_store_cells",
         "sales_date_dayfirst",
         "sales_date_format",
+        "stagnant_outbound_mode",
+        "stagnant_min_keep_qty",
     ]
     payload = "|".join(f"{k}={config.get(k)}" for k in keys)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
 def stage_error(stage: str, exc: Exception) -> RuntimeError:
+    """统一包装阶段错误，便于批量模式汇总失败原因。"""
     return RuntimeError(f"[{stage}] {exc}")
 
 
 def map_province_by_supplier_card(card: Optional[str]) -> str:
+    """根据供商卡号映射省份，未知值统一回退。"""
     normalized = core_io.normalize_supplier_card_value(card)
     if normalized is None:
         return "其他/未知"
@@ -52,6 +58,7 @@ def map_province_by_supplier_card(card: Optional[str]) -> str:
 
 
 def _parse_season_mode(season_mode_raw: Any) -> bool:
+    """兼容布尔值和历史字符串配置。"""
     if isinstance(season_mode_raw, bool):
         return season_mode_raw
     mode_text = str(season_mode_raw).strip().lower()
@@ -63,6 +70,7 @@ def _parse_season_mode(season_mode_raw: Any) -> bool:
 
 
 def _effective_brand_keywords(config: Dict[str, Any]) -> List[str]:
+    """返回有效品牌关键词列表，禁止空配置继续运行。"""
     brand_keywords = [str(b).strip() for b in (config.get("brand_keywords") or []) if str(b).strip()]
     if not brand_keywords:
         raise ValueError("brand_keywords cannot be empty. Please configure at least one brand keyword in config.yaml.")
@@ -70,6 +78,7 @@ def _effective_brand_keywords(config: Dict[str, Any]) -> List[str]:
 
 
 def _load_carton_factor_cached(path: Path) -> pd.DataFrame:
+    """按文件修改时间缓存装箱因子表，避免批量模式重复读取。"""
     try:
         mtime_ns: Optional[int] = path.stat().st_mtime_ns
     except OSError:
@@ -92,6 +101,7 @@ def _load_sales_data(
     sales_date_format: str,
     sales_date_dayfirst: bool,
 ) -> tuple[pd.DataFrame, int, List[str], int, int]:
+    """读取并标准化全部销售文件，返回合并后的销售明细与质量统计。"""
     sales_data: List[pd.DataFrame] = []
     loaded_sales_file_count = 0
     missing_sales_files: List[str] = []
@@ -106,6 +116,7 @@ def _load_sales_data(
         df = core_io.read_excel_first_sheet(filepath)
         df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col = core_io.normalize_sales_df(df)
         store_code_col = core_io.find_column(df.columns.tolist(), ["门店编码", "store_code"])
+        sales_amount_col = core_io.find_sales_amount_column(df.columns.tolist())
         invalid_sales_qty_rows += int(df.attrs.get("invalid_qty_rows", 0))
 
         national_barcode_col = core_io.find_column(df.columns.tolist(), ["国条码"])
@@ -128,6 +139,9 @@ def _load_sales_data(
         if supplier_card_col is not None:
             sales_columns.append(supplier_card_col)
             normalized_sales_columns.append("supplier_card")
+        if sales_amount_col is not None:
+            sales_columns.append(sales_amount_col)
+            normalized_sales_columns.append("sales_amount")
 
         df = df[sales_columns].copy()
         df.columns = normalized_sales_columns
@@ -154,6 +168,12 @@ def _load_sales_data(
         if "supplier_card" not in df.columns:
             df["supplier_card"] = None
         df["supplier_card"] = df["supplier_card"].apply(core_io.normalize_supplier_card_value)
+        if "sales_amount" in df.columns:
+            sales_amount_series, _ = core_io.normalize_numeric_series(df["sales_amount"])
+            df["sales_amount"] = sales_amount_series
+        else:
+            # 兼容仅提供销量、不提供销售额的输入文件，金额汇总缺失时按 0 处理。
+            df["sales_amount"] = 0.0
         df = core_io.ensure_sales_brand_column(df, brand_keywords)
 
         parsed_dates = core_io.parse_sales_dates(df["sales_date"], date_format=sales_date_format, dayfirst=sales_date_dayfirst)
@@ -176,6 +196,107 @@ def _load_sales_data(
     return sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows, invalid_sales_qty_rows
 
 
+def _build_store_sales_ranking_transfer_frame(detail: pd.DataFrame, sales_df: pd.DataFrame) -> pd.DataFrame:
+    """基于当前明细和销售额，生成门店销量排名调货汇总页。"""
+    sales_base = sales_df.copy()
+    sales_base["store_key"] = sales_base.get("store_code", pd.Series(index=sales_base.index)).apply(core_io.normalize_barcode_value)
+    sales_base["store_key"] = sales_base["store_key"].where(sales_base["store_key"].notna(), sales_base["store"])
+    sales_base["product_key"] = sales_base.get("product_code", pd.Series(index=sales_base.index)).apply(core_io.normalize_barcode_value)
+    sales_base["barcode_key"] = sales_base["barcode"].apply(core_io.normalize_barcode_value)
+    sales_base["product_key"] = sales_base["product_key"].where(sales_base["product_key"].notna(), sales_base["barcode_key"])
+
+    store_amounts = (
+        sales_base.groupby(["store_key"], as_index=False)["sales_amount"]
+        .sum()
+        .rename(columns={"sales_amount": "store_sales_amount"})
+    )
+    item_amounts = (
+        sales_base.groupby(["store_key", "product_key"], as_index=False)["sales_amount"]
+        .sum()
+        .rename(columns={"sales_amount": "item_sales_amount"})
+    )
+
+    transfer = detail.copy()
+    transfer = transfer.merge(store_amounts, on=["store_key"], how="left")
+    transfer = transfer.merge(item_amounts, on=["store_key", "product_key"], how="left")
+    transfer["store_sales_amount"] = pd.to_numeric(transfer["store_sales_amount"], errors="coerce").fillna(0.0)
+    transfer["item_sales_amount"] = pd.to_numeric(transfer["item_sales_amount"], errors="coerce").fillna(0.0)
+
+    zero_mtd_full_outbound_mask = (
+        (pd.to_numeric(transfer["daily_sales_3m_mtd"], errors="coerce").fillna(0.0) == 0)
+        & (pd.to_numeric(transfer["inventory_qty"], errors="coerce").fillna(0.0) > 0)
+        & (transfer["out_of_stock"] == "否")
+    )
+    transfer["ranking_transfer_qty"] = np.where(
+        zero_mtd_full_outbound_mask,
+        transfer["inventory_qty"],
+        transfer["suggest_outbound_qty"],
+    )
+    transfer = transfer[pd.to_numeric(transfer["ranking_transfer_qty"], errors="coerce").fillna(0) > 0].copy()
+    if transfer.empty:
+        return pd.DataFrame(
+            columns=[
+                "排名",
+                "门店名称",
+                "门店销售额总计",
+                "品牌",
+                "商品条码",
+                "商品名称",
+                "商品销售额",
+                "调货数量",
+                "近三月+本月迄今平均日销",
+                "近30天平均日销售",
+                "库存数量",
+                "缺货",
+                "风险等级",
+                "库存周转天数",
+            ]
+        )
+
+    transfer["排名"] = (
+        transfer["store_sales_amount"].rank(method="dense", ascending=False).astype(int)
+    )
+    transfer["商品条码"] = transfer["barcode_output"].apply(lambda x: core_io.normalize_barcode_value(x) or "")
+    transfer["调货数量"] = pd.to_numeric(transfer["ranking_transfer_qty"], errors="coerce").fillna(0).astype(int)
+
+    transfer_out = transfer.rename(
+        columns={
+            "store": "门店名称",
+            "store_sales_amount": "门店销售额总计",
+            "brand": "品牌",
+            "product": "商品名称",
+            "item_sales_amount": "商品销售额",
+            "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
+            "daily_sales_30d": "近30天平均日销售",
+            "inventory_qty": "库存数量",
+            "out_of_stock": "缺货",
+            "risk_level": "风险等级",
+            "turnover_days": "库存周转天数",
+        }
+    )[
+        [
+            "排名",
+            "门店名称",
+            "门店销售额总计",
+            "品牌",
+            "商品条码",
+            "商品名称",
+            "商品销售额",
+            "调货数量",
+            "近三月+本月迄今平均日销",
+            "近30天平均日销售",
+            "库存数量",
+            "缺货",
+            "风险等级",
+            "库存周转天数",
+        ]
+    ]
+    return transfer_out.sort_values(
+        ["排名", "门店名称", "品牌", "商品名称", "商品条码"],
+        ascending=[True, True, True, True, True],
+    ).reset_index(drop=True)
+
+
 def _compute_window_context(
     sales_df: pd.DataFrame,
     inventory_date_ts: pd.Timestamp,
@@ -184,6 +305,7 @@ def _compute_window_context(
     recent_days: int,
     fail_on_empty_window: bool,
 ) -> Dict[str, Any]:
+    """基于库存日期与销售数据范围，计算两个销售窗口的有效区间。"""
     mtd_end = inventory_date_ts if include_mtd else (inventory_date_ts.replace(day=1) - pd.Timedelta(days=1))
     mtd_start = (inventory_date_ts.replace(day=1) - pd.DateOffset(months=full_months)).normalize()
     recent_start = (inventory_date_ts - pd.Timedelta(days=recent_days - 1)).normalize()
@@ -220,6 +342,7 @@ def _prepare_inventory_data(
     display_name: str,
     base_dir: Path,
 ) -> tuple[pd.DataFrame, Path, pd.Timestamp, str, int]:
+    """读取库存表、标准化字段，并解析库存日期与输出文件名。"""
     inv_df = core_io.read_excel_first_sheet(inv_path)
     inv_df = core_io.ensure_inventory_brand_column(inv_df, brand_keywords)
     inventory_date_text = core_io.extract_inventory_date(inv_df)
@@ -279,27 +402,49 @@ def _apply_wumei_barcode_mapping(
     sales_df: pd.DataFrame,
     is_wumei_system: bool,
 ) -> tuple[pd.DataFrame, int, int, int, str]:
+    """预留物美系统的条码特殊映射扩展点，当前保持透传。"""
     _ = sales_df
     if not is_wumei_system:
         return inv_df, 0, 0, 0, ""
     return inv_df, 0, 0, 0, ""
 
 
-def _apply_recommendation_columns(detail: pd.DataFrame, low_days: float, high_days: float) -> pd.DataFrame:
+def _apply_recommendation_columns(
+    detail: pd.DataFrame,
+    low_days: float,
+    high_days: float,
+    stagnant_outbound_mode: str,
+    stagnant_min_keep_qty: float,
+) -> pd.DataFrame:
+    """补充缺货、补货、调出建议列，并处理零销量积压库存。"""
     detail = detail.copy()
     detail["out_of_stock"] = np.where((detail["forecast_daily_sales"] > 0) & (detail["inventory_qty"] == 0), "是", "否")
     detail["daily_demand"] = detail["forecast_daily_sales"]
     detail["low_target_qty"] = detail["daily_demand"] * low_days
     detail["high_keep_qty"] = detail["daily_demand"] * high_days
+    # 两个销售窗口都为 0 且仍有库存时，视为零销量积压库存。
+    stagnant_mask = (
+        (detail["daily_sales_3m_mtd"] <= 0)
+        & (detail["daily_sales_30d"] <= 0)
+        & (detail["inventory_qty"] > 0)
+    )
     detail["need_qty"] = np.where(
         detail["forecast_daily_sales"] > 0,
         np.ceil(np.maximum(0, detail["low_target_qty"] - detail["inventory_qty"])),
         0,
     )
+    detail["outbound_rule"] = np.where(stagnant_mask, "zero_sales_stagnant", "high_stock_overage")
     detail["suggest_outbound_qty"] = np.where(
         (detail["risk_level"] == "高") & (detail["forecast_daily_sales"] > 0),
         np.floor(np.maximum(0, detail["inventory_qty"] - detail["high_keep_qty"])),
         0,
+    )
+    # 零销量积压库存支持两种模式：全部调出，或保留最小安全库存后再调出。
+    stagnant_keep_qty = 0 if stagnant_outbound_mode == "all_outbound" else stagnant_min_keep_qty
+    detail["suggest_outbound_qty"] = np.where(
+        stagnant_mask,
+        np.floor(np.maximum(0, detail["inventory_qty"] - stagnant_keep_qty)),
+        detail["suggest_outbound_qty"],
     )
     detail["suggest_replenish_qty"] = np.where(
         (detail["risk_level"] == "低") | (detail["out_of_stock"] == "是"),
@@ -312,6 +457,7 @@ def _apply_recommendation_columns(detail: pd.DataFrame, low_days: float, high_da
 
 
 def _join_unique_text(series: pd.Series) -> str:
+    """拼接去重后的文本，保持输出稳定。"""
     values: list[str] = []
     for value in series:
         text = str(value).strip()
@@ -323,10 +469,12 @@ def _join_unique_text(series: pd.Series) -> str:
 
 
 def _has_non_empty_text(series: pd.Series) -> pd.Series:
+    """判断序列中的文本是否为非空有效值。"""
     return series.fillna("").astype(str).str.strip() != ""
 
 
 def _build_product_code_catalog(sales_df: pd.DataFrame, inv_df: pd.DataFrame) -> pd.DataFrame:
+    """汇总销售/库存两侧商品编码与标准名称，用于人工核对。"""
     sales_base = sales_df[["product_code", "brand", "product"]].copy()
     sales_base["product_code"] = sales_base["product_code"].apply(core_io.normalize_barcode_value)
     sales_base = sales_base.dropna(subset=["product_code"])
@@ -378,6 +526,7 @@ def _build_product_code_catalog(sales_df: pd.DataFrame, inv_df: pd.DataFrame) ->
 
 
 def _build_summary_frame(detail_out: pd.DataFrame, out_of_stock_out: pd.DataFrame, missing_sku_out: pd.DataFrame, detail: pd.DataFrame) -> pd.DataFrame:
+    """构建报表核心指标汇总。"""
     summary_rows = [
         ["风险等级-高", int((detail_out["风险等级"] == "高").sum())],
         ["风险等级-中", int((detail_out["风险等级"] == "中").sum())],
@@ -393,6 +542,7 @@ def _build_summary_frame(detail_out: pd.DataFrame, out_of_stock_out: pd.DataFram
 
 
 def _build_executive_overview_frame(summary_out: pd.DataFrame, status_out: pd.DataFrame) -> pd.DataFrame:
+    """将核心指标和运行状态拼成统一总览页。"""
     summary_section = summary_out.copy()
     summary_section.insert(0, "分组", "核心指标")
     status_section = status_out.rename(columns={"状态项": "指标", "值": "数值"}).copy()
@@ -428,6 +578,7 @@ def _build_status_frame(
     wumei_barcode_map_conflicts: int,
     wumei_barcode_conflict_samples: str,
 ) -> pd.DataFrame:
+    """构建运行状态页的数据质量与配置摘要。"""
     status_rows = [
         ["程序版本", program_version],
         ["配置快照", compute_config_snapshot(config)],
@@ -469,6 +620,7 @@ def generate_report_for_system(
     base_dir: Path,
     program_version: str,
 ) -> Dict[str, Any]:
+    """执行单个系统的完整报表流水线。"""
     config = dict(system_cfg)
     _ = global_cfg
     system_id = str(config.get("system_id", "single")).strip() or "single"
@@ -531,6 +683,7 @@ def generate_report_for_system(
     sales_date_format = str(config.get("sales_date_format", ""))
     use_peak_mode = _parse_season_mode(config.get("season_mode", False))
     fail_on_empty_window = bool(config.get("fail_on_empty_window", False))
+    merge_detail_store_cells = bool(config.get("merge_detail_store_cells", True))
 
     try:
         sales_df, loaded_sales_file_count, missing_sales_files, invalid_sales_date_rows, invalid_sales_qty_rows = _load_sales_data(
@@ -582,6 +735,8 @@ def generate_report_for_system(
 
     high_days = float(config.get("risk_days_high", 60))
     low_days = float(config.get("risk_days_low", 45))
+    stagnant_outbound_mode = str(config.get("stagnant_outbound_mode", "keep_safety_stock"))
+    stagnant_min_keep_qty = float(config.get("stagnant_min_keep_qty", 0))
     detail, missing_sales, store_summary, brand_summary, mapping_stats = core_matching.build_detail_with_matching(
         sales_df=sales_df,
         inv_df=inv_df,
@@ -601,7 +756,14 @@ def generate_report_for_system(
         province_mapper=map_province_by_supplier_card,
     )
     product_code_catalog = _build_product_code_catalog(sales_df, inv_df)
-    detail = _apply_recommendation_columns(detail, low_days, high_days)
+    detail = _apply_recommendation_columns(
+        detail,
+        low_days,
+        high_days,
+        stagnant_outbound_mode,
+        stagnant_min_keep_qty,
+    )
+    store_sales_ranking_transfer_out = _build_store_sales_ranking_transfer_frame(detail, sales_df)
 
     frames = core_output_tables.build_report_frames(
         detail=detail,
@@ -651,8 +813,12 @@ def generate_report_for_system(
 
     executive_overview_out = _build_executive_overview_frame(summary_out, status_out)
 
-    sheets = {name: frame for name, frame in frames.items() if name != "商品编码对照清单"}
+    sheets = {
+        **{name: frame for name, frame in frames.items() if name not in {"使用说明", "商品编码对照清单"}},
+    }
+    sheets["门店销量排名调货汇总"] = store_sales_ranking_transfer_out
     sheets["运行总览"] = executive_overview_out
+    sheets["使用说明"] = frames["使用说明"]
     sheets["商品编码对照清单"] = frames["商品编码对照清单"]
 
     try:
@@ -661,6 +827,7 @@ def generate_report_for_system(
             display_name=display_name,
             inventory_date=inventory_date,
             sheets=sheets,
+            merge_detail_store_cells=merge_detail_store_cells,
         )
     except Exception as exc:  # noqa: BLE001
         raise stage_error("write_report", exc) from exc

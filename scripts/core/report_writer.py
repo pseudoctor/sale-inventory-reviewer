@@ -9,6 +9,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 
 PREFERRED_WIDTHS = {
+    "排名": 8,
     "分组": 12,
     "指标": 34,
     "数值": 26,
@@ -16,9 +17,12 @@ PREFERRED_WIDTHS = {
     "说明": 72,
     "使用建议": 56,
     "门店名称": 18,
+    "门店销售额总计": 18,
     "品牌": 10,
     "商品条码": 16,
     "商品名称": 36,
+    "商品销售额": 16,
+    "调货数量": 12,
     "省份": 10,
     "装箱数（因子）": 12,
     "近三月+本月迄今平均日销": 22,
@@ -38,6 +42,9 @@ PREFERRED_WIDTHS = {
 }
 
 NUMBER_FORMATS = {
+    "门店销售额总计": "0.00",
+    "商品销售额": "0.00",
+    "调货数量": "0",
     "近三月+本月迄今平均日销": "0.000",
     "近30天平均日销售": "0.000",
     "预测平均日销(季节模式后)": "0.000",
@@ -60,6 +67,7 @@ SUMMARY_ONE_DECIMAL_METRICS = {
 
 
 def _set_sheet_title(ws, display_name: str, inventory_date: str, center: Alignment) -> None:
+    """为每个工作表写入统一标题行。"""
     ws.insert_rows(1)
     title = f"{display_name} | 库存日期：{inventory_date}"
     ws.cell(row=1, column=1, value=title)
@@ -71,6 +79,7 @@ def _set_sheet_title(ws, display_name: str, inventory_date: str, center: Alignme
 
 
 def _set_freeze_and_filter(ws, sheet_name: str) -> None:
+    """设置冻结窗格与筛选范围。"""
     if sheet_name == "使用说明":
         ws.freeze_panes = "A3"
     else:
@@ -80,6 +89,7 @@ def _set_freeze_and_filter(ws, sheet_name: str) -> None:
 
 
 def _style_headers(ws, header_fill: PatternFill, header_font: Font, center: Alignment) -> list:
+    """应用表头样式并返回表头列表。"""
     headers = [c.value for c in ws[2]]
     ws.row_dimensions[2].height = 22
     for cell in ws[2]:
@@ -90,6 +100,7 @@ def _style_headers(ws, header_fill: PatternFill, header_font: Font, center: Alig
 
 
 def _apply_column_widths(ws) -> None:
+    """根据预设宽度和内容长度调整列宽。"""
     for col in ws.columns:
         max_len = 0
         col_letter = ws.cell(row=2, column=col[0].column).column_letter
@@ -106,6 +117,7 @@ def _apply_column_widths(ws) -> None:
 
 
 def _estimate_row_height(ws, row_idx: int, wrap_columns: set[str], min_height: int = 20) -> float:
+    """估算自动换行后的行高。"""
     max_lines = 1
     is_usage_guide = ws.title == "使用说明"
     for col_idx in range(1, ws.max_column + 1):
@@ -137,6 +149,7 @@ def _style_data_rows(
     out_of_stock_fill: PatternFill,
     band_fill: PatternFill,
 ) -> Dict[str, int]:
+    """统一处理数据行样式、数字格式和条件高亮。"""
     header_to_idx = {name: idx + 1 for idx, name in enumerate(headers)}
     wrap_columns = {"门店名称", "商品名称", "说明", "使用建议", "指标", "数值"}
     for row in ws.iter_rows(min_row=3, max_row=ws.max_row):

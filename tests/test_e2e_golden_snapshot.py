@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+from openpyxl import load_workbook
 
 from scripts.generate_inventory_risk_report import generate_report_for_system
 
@@ -467,6 +468,308 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     row = detail.iloc[0]
     assert str(row["商品条码"]) == "817620"
     assert row["省份"] == "其他/未知"
+
+
+def test_zero_sales_stagnant_inventory_generates_outbound_qty(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌S"],
+                "商品名称": ["滞销SKU"],
+                "国条码": ["6901111111111"],
+                "销售数量": [0],
+                "销售时间": ["2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌S"],
+                "商品名称": ["滞销SKU"],
+                "国条码": ["6901111111111"],
+                "库存数量": [20],
+                "库存日期": ["2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6901111111111"],
+                "商品名称": ["滞销SKU"],
+                "装箱数（因子）": [6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "stagnant_min_keep_qty": 2,
+        "brand_keywords": ["品牌S"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    generate_report_for_system(config, config)
+    transfer = pd.read_excel(output_file, sheet_name="建议调货清单", header=1)
+    assert len(transfer) == 1
+    assert int(transfer["建议调出数量"].iloc[0]) == 18
+
+
+def test_zero_sales_stagnant_inventory_supports_all_outbound_mode(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌S"],
+                "商品名称": ["滞销SKU"],
+                "国条码": ["6901111111111"],
+                "销售数量": [0],
+                "销售时间": ["2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌S"],
+                "商品名称": ["滞销SKU"],
+                "国条码": ["6901111111111"],
+                "库存数量": [20],
+                "库存日期": ["2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6901111111111"],
+                "商品名称": ["滞销SKU"],
+                "装箱数（因子）": [6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "stagnant_outbound_mode": "all_outbound",
+        "stagnant_min_keep_qty": 5,
+        "brand_keywords": ["品牌S"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    generate_report_for_system(config, config)
+    transfer = pd.read_excel(output_file, sheet_name="建议调货清单", header=1)
+    assert len(transfer) == 1
+    assert int(transfer["建议调出数量"].iloc[0]) == 20
+
+
+def test_detail_sheet_can_disable_store_name_merge_cells(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A", "门店A"],
+                "品牌": ["品牌T", "品牌T"],
+                "商品名称": ["SKU1", "SKU2"],
+                "国条码": ["6902111111111", "6902111111112"],
+                "销售数量": [10, 8],
+                "销售时间": ["2026-02-08", "2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A", "门店A"],
+                "品牌": ["品牌T", "品牌T"],
+                "商品名称": ["SKU1", "SKU2"],
+                "国条码": ["6902111111111", "6902111111112"],
+                "库存数量": [100, 80],
+                "库存日期": ["2026-02-09", "2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6902111111111", "6902111111112"],
+                "商品名称": ["SKU1", "SKU2"],
+                "装箱数（因子）": [6, 6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "merge_detail_store_cells": False,
+        "brand_keywords": ["品牌T"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    generate_report_for_system(config, config)
+    wb = load_workbook(output_file)
+    detail_ws = wb["明细"]
+    merged_ranges = {str(cell_range) for cell_range in detail_ws.merged_cells.ranges}
+    assert "A3:A4" not in merged_ranges
+
+
+def test_report_includes_store_sales_ranking_transfer_sheet(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A", "门店A", "门店B"],
+                "品牌": ["品牌T", "品牌T", "品牌T"],
+                "商品名称": ["SKU1", "SKU2", "SKU1"],
+                "商品条码": ["6902111111111", "6902111111112", "6902111111111"],
+                "销售数量": [0, 10, 20],
+                "销售金额": [100.0, 50.0, 300.0],
+                "销售时间": ["2026-02-08", "2026-02-08", "2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A", "门店A", "门店B"],
+                "品牌": ["品牌T", "品牌T", "品牌T"],
+                "商品名称": ["SKU1", "SKU2", "SKU1"],
+                "商品条码": ["6902111111111", "6902111111112", "6902111111111"],
+                "库存数量": [8, 20, 80],
+                "库存日期": ["2026-02-09", "2026-02-09", "2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6902111111111", "6902111111112"],
+                "商品名称": ["SKU1", "SKU2"],
+                "装箱数（因子）": [6, 6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "merge_detail_store_cells": True,
+        "brand_keywords": ["品牌T"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    generate_report_for_system(config, config)
+    ranking_sheet = pd.read_excel(output_file, sheet_name="门店销量排名调货汇总", header=1)
+    assert ranking_sheet["门店名称"].tolist() == ["门店B", "门店A"]
+    assert ranking_sheet["排名"].tolist() == [1, 2]
+    assert ranking_sheet["门店销售额总计"].tolist() == [300.0, 150.0]
+    assert ranking_sheet["商品销售额"].tolist() == [300.0, 100.0]
+    assert ranking_sheet["调货数量"].tolist() == [40, 8]
 
 
 def test_sales_supplier_fallback_handles_duplicate_store_barcode(tmp_path: Path):
