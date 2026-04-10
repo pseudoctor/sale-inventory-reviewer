@@ -122,7 +122,7 @@ def _load_sales_data(
         if require_sales_amount and sales_amount_col is None:
             raise ValueError(
                 f"Missing required sales amount column in sales file: {filepath.name} "
-                "(expected one of: 销售金额, 含税销售额/元, 销售额)"
+                "(expected one of: 销售金额, 含税销售金额/元, 含税销售额/元, 销售额)"
             )
         invalid_sales_qty_rows += int(df.attrs.get("invalid_qty_rows", 0))
 

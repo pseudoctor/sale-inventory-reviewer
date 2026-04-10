@@ -80,6 +80,46 @@ class HealthCheckTest(unittest.TestCase):
             self.assertTrue(any("no auto-detected sales files" in err for err in errors))
             self.assertTrue(any("brand_keywords is empty" in err for err in errors))
 
+    def test_single_mode_auto_scan_checks_sales_amount_column_when_ranked_summary_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "raw_data"
+            raw.mkdir()
+            reports = root / "reports"
+            reports.mkdir()
+            data_dir = root / "data"
+            data_dir.mkdir()
+            pd.DataFrame({"门店名称": ["A店"], "商品名称": ["SKU1"], "商品条码": ["1"], "库存数量": [1]}).to_excel(raw / "库存.xlsx", index=False)
+            pd.DataFrame(
+                {"门店名称": ["A店"], "商品名称": ["SKU1"], "商品条码": ["1"], "销售数量": [1], "销售时间": ["2026-02-01"]}
+            ).to_excel(raw / "销售202602.xlsx", index=False)
+            pd.DataFrame({"商品条码": ["1"], "商品名称": ["SKU1"], "装箱数（因子）": [6]}).to_excel(data_dir / "sku装箱数.xlsx", index=False)
+
+            cfg = {
+                "run_mode": "single",
+                "raw_data_dir": str(raw),
+                "inventory_file": "库存.xlsx",
+                "sales_files": [],
+                "output_file": "",
+                "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+                "risk_days_high": 60,
+                "risk_days_low": 45,
+                "sales_window_full_months": 3,
+                "sales_window_include_mtd": True,
+                "sales_window_recent_days": 30,
+                "season_mode": False,
+                "enable_ranked_store_transfer_summary": True,
+                "brand_keywords": ["测试"],
+                "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
+            }
+            with (
+                patch("scripts.health_check.BASE_DIR", root),
+                patch("scripts.health_check.CONFIG_PATH", root / "config.yaml"),
+                patch("scripts.health_check.core_config.load_config", return_value=cfg),
+            ):
+                errors = health_check._check_config_and_paths()
+            self.assertTrue(any("sales amount column" in err for err in errors))
+
     def test_check_config_and_paths_requires_xlrd_for_xls_inputs(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -101,7 +101,7 @@ def _check_sales_amount_columns(sales_files: list[Path]) -> list[str]:
         if sales_amount_col is None:
             errors.append(
                 f"sales file missing sales amount column: {sales_file.name} "
-                "(expected one of: 销售金额, 含税销售额/元, 销售额)"
+                "(expected one of: 销售金额, 含税销售金额/元, 含税销售额/元, 销售额)"
             )
     return errors
 
@@ -203,6 +203,8 @@ def _check_config_and_paths() -> list[str]:
         if not configured_sales:
             try:
                 candidates = core_io.resolve_sales_candidates(raw_data_dir, [])
+                if bool(config.get("enable_ranked_store_transfer_summary", False)) and candidates:
+                    errors.extend(_check_sales_amount_columns(candidates))
                 if not candidates:
                     ignored = core_io.list_ignored_sales_files(raw_data_dir, [])
                     ignored_text = core_io.format_ignored_sales_files(ignored)
