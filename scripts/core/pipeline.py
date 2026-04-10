@@ -122,7 +122,7 @@ def _load_sales_data(
         if require_sales_amount and sales_amount_col is None:
             raise ValueError(
                 f"Missing required sales amount column in sales file: {filepath.name} "
-                "(expected one of: 销售金额, 含税销售金额/元, 含税销售额/元, 销售额)"
+                "(expected one of: 销售金额, 含税销售金额/元, 含税销售额/元, 销售额, sales_amount, amount)"
             )
         invalid_sales_qty_rows += int(df.attrs.get("invalid_qty_rows", 0))
 
@@ -236,18 +236,8 @@ def _build_store_sales_ranking_transfer_frame(
         .sum()
         .rename(columns={"sales_qty": "item_sales_qty"})
     )
-    all_sales_base = sales_df.copy()
-    all_sales_base["store_key"] = all_sales_base.get("store_code", pd.Series(index=all_sales_base.index)).apply(core_io.normalize_barcode_value)
-    all_sales_base["store_key"] = all_sales_base["store_key"].where(
-        all_sales_base["store_key"].notna(),
-        all_sales_base["store"],
-    )
-    all_sales_base["product_key"] = all_sales_base.get("product_code", pd.Series(index=all_sales_base.index)).apply(core_io.normalize_barcode_value)
-    all_sales_base["barcode_key"] = all_sales_base["barcode"].apply(core_io.normalize_barcode_value)
-    all_sales_base["product_key"] = all_sales_base["product_key"].where(
-        all_sales_base["product_key"].notna(),
-        all_sales_base["barcode_key"],
-    )
+    # 单价兜底也限定在同一 3M+MTD 销售窗口内，且仅使用有效销量记录，保持与金额口径一致。
+    all_sales_base = sales_base[pd.to_numeric(sales_base["sales_qty"], errors="coerce").fillna(0.0) > 0].copy()
     global_item_amounts = (
         all_sales_base.groupby(["product_key"], as_index=False)["sales_amount"]
         .sum()

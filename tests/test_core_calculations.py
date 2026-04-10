@@ -689,8 +689,8 @@ class CoreCalculationsTest(unittest.TestCase):
 
         self.assertEqual(out["门店销售额总计(2026-02-01至2026-02-02)"].tolist(), [150.0, 150.0])
         self.assertEqual(out["商品销售额(2026-02-01至2026-02-02)"].tolist(), [100.0, 50.0])
-        self.assertEqual(out["商品单价"].tolist(), [15.0, 10.0])
-        self.assertEqual(out["库存金额"].tolist(), [150.0, 200.0])
+        self.assertEqual(out["商品单价"].tolist(), [0.0, 10.0])
+        self.assertEqual(out["库存金额"].tolist(), [0.0, 200.0])
         self.assertEqual(out["调货数量"].tolist(), [10, 6])
         self.assertEqual(out["排名"].tolist(), [1, 1])
 
