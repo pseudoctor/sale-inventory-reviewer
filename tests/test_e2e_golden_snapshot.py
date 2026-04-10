@@ -772,6 +772,8 @@ def test_report_includes_store_sales_ranking_transfer_sheet(tmp_path: Path):
     assert ranking_sheet["排名"].tolist() == [1, 2]
     assert ranking_sheet[store_amount_col].tolist() == [300.0, 150.0]
     assert ranking_sheet[item_amount_col].tolist() == [300.0, 100.0]
+    assert ranking_sheet["商品单价"].tolist() == [15.0, 15.0]
+    assert ranking_sheet["库存金额"].tolist() == [1200.0, 120.0]
     assert ranking_sheet["调货数量"].tolist() == [40, 8]
 
 

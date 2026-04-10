@@ -22,7 +22,9 @@ PREFERRED_WIDTHS = {
     "商品条码": 16,
     "商品名称": 36,
     "商品销售额": 16,
+    "商品单价": 12,
     "调货数量": 12,
+    "库存金额": 16,
     "省份": 10,
     "装箱数（因子）": 12,
     "近三月+本月迄今平均日销": 22,
@@ -44,7 +46,9 @@ PREFERRED_WIDTHS = {
 NUMBER_FORMATS = {
     "门店销售额总计": "0.00",
     "商品销售额": "0.00",
+    "商品单价": "0.0",
     "调货数量": "0",
+    "库存金额": "0.0",
     "近三月+本月迄今平均日销": "0.000",
     "近30天平均日销售": "0.000",
     "预测平均日销(季节模式后)": "0.000",
@@ -285,6 +289,7 @@ def write_report_with_style(
     display_name: str,
     inventory_date: str,
     sheets: Dict[str, pd.DataFrame],
+    merge_detail_store_cells: bool = True,
 ) -> None:
     with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
@@ -326,7 +331,7 @@ def write_report_with_style(
             _apply_overview_metric_format(ws, header_to_idx)
 
     ws_detail = wb["明细"] if "明细" in wb.sheetnames else None
-    if ws_detail is not None:
+    if ws_detail is not None and merge_detail_store_cells:
         _merge_detail_store_cells(ws_detail, center)
 
     _apply_borders(wb)

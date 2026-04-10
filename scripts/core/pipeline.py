@@ -231,12 +231,84 @@ def _build_store_sales_ranking_transfer_frame(
         .sum()
         .rename(columns={"sales_amount": "item_sales_amount"})
     )
+    item_sales_qty = (
+        sales_base.groupby(["store_key", "product_key"], as_index=False)["sales_qty"]
+        .sum()
+        .rename(columns={"sales_qty": "item_sales_qty"})
+    )
+    all_sales_base = sales_df.copy()
+    all_sales_base["store_key"] = all_sales_base.get("store_code", pd.Series(index=all_sales_base.index)).apply(core_io.normalize_barcode_value)
+    all_sales_base["store_key"] = all_sales_base["store_key"].where(
+        all_sales_base["store_key"].notna(),
+        all_sales_base["store"],
+    )
+    all_sales_base["product_key"] = all_sales_base.get("product_code", pd.Series(index=all_sales_base.index)).apply(core_io.normalize_barcode_value)
+    all_sales_base["barcode_key"] = all_sales_base["barcode"].apply(core_io.normalize_barcode_value)
+    all_sales_base["product_key"] = all_sales_base["product_key"].where(
+        all_sales_base["product_key"].notna(),
+        all_sales_base["barcode_key"],
+    )
+    global_item_amounts = (
+        all_sales_base.groupby(["product_key"], as_index=False)["sales_amount"]
+        .sum()
+        .rename(columns={"sales_amount": "global_item_sales_amount"})
+    )
+    global_item_sales_qty = (
+        all_sales_base.groupby(["product_key"], as_index=False)["sales_qty"]
+        .sum()
+        .rename(columns={"sales_qty": "global_item_sales_qty"})
+    )
+    current_store_all_amounts = (
+        all_sales_base.groupby(["store_key", "product_key"], as_index=False)["sales_amount"]
+        .sum()
+        .rename(columns={"sales_amount": "current_store_all_sales_amount"})
+    )
+    current_store_all_qty = (
+        all_sales_base.groupby(["store_key", "product_key"], as_index=False)["sales_qty"]
+        .sum()
+        .rename(columns={"sales_qty": "current_store_all_sales_qty"})
+    )
 
     transfer = detail.copy()
     transfer = transfer.merge(store_amounts, on=["store_key"], how="left")
     transfer = transfer.merge(item_amounts, on=["store_key", "product_key"], how="left")
+    transfer = transfer.merge(item_sales_qty, on=["store_key", "product_key"], how="left")
+    transfer = transfer.merge(global_item_amounts, on=["product_key"], how="left")
+    transfer = transfer.merge(global_item_sales_qty, on=["product_key"], how="left")
+    transfer = transfer.merge(current_store_all_amounts, on=["store_key", "product_key"], how="left")
+    transfer = transfer.merge(current_store_all_qty, on=["store_key", "product_key"], how="left")
     transfer["store_sales_amount"] = pd.to_numeric(transfer["store_sales_amount"], errors="coerce").fillna(0.0)
     transfer["item_sales_amount"] = pd.to_numeric(transfer["item_sales_amount"], errors="coerce").fillna(0.0)
+    transfer["item_sales_qty"] = pd.to_numeric(transfer["item_sales_qty"], errors="coerce").fillna(0.0)
+    transfer["global_item_sales_amount"] = pd.to_numeric(transfer["global_item_sales_amount"], errors="coerce").fillna(0.0)
+    transfer["global_item_sales_qty"] = pd.to_numeric(transfer["global_item_sales_qty"], errors="coerce").fillna(0.0)
+    transfer["current_store_all_sales_amount"] = pd.to_numeric(transfer["current_store_all_sales_amount"], errors="coerce").fillna(0.0)
+    transfer["current_store_all_sales_qty"] = pd.to_numeric(transfer["current_store_all_sales_qty"], errors="coerce").fillna(0.0)
+    transfer["unit_price"] = np.where(
+        transfer["item_sales_qty"] > 0,
+        transfer["item_sales_amount"] / transfer["item_sales_qty"],
+        0.0,
+    )
+    transfer["other_store_sales_amount"] = np.maximum(
+        0.0,
+        transfer["global_item_sales_amount"] - transfer["current_store_all_sales_amount"],
+    )
+    transfer["other_store_sales_qty"] = np.maximum(
+        0.0,
+        transfer["global_item_sales_qty"] - transfer["current_store_all_sales_qty"],
+    )
+    transfer["fallback_unit_price"] = np.where(
+        transfer["other_store_sales_qty"] > 0,
+        transfer["other_store_sales_amount"] / transfer["other_store_sales_qty"],
+        0.0,
+    )
+    # 当前门店窗口内没有销量时，回退到其它门店该商品的平均单价。
+    transfer["unit_price"] = np.where(
+        transfer["unit_price"] > 0,
+        transfer["unit_price"],
+        transfer["fallback_unit_price"],
+    )
+    transfer["inventory_amount"] = transfer["unit_price"] * pd.to_numeric(transfer["inventory_qty"], errors="coerce").fillna(0.0)
 
     zero_mtd_full_outbound_mask = (
         (pd.to_numeric(transfer["daily_sales_3m_mtd"], errors="coerce").fillna(0.0) == 0)
@@ -259,7 +331,9 @@ def _build_store_sales_ranking_transfer_frame(
                 "商品条码",
                 "商品名称",
                 "商品销售额",
+                "商品单价",
                 "调货数量",
+                "库存金额",
                 "近三月+本月迄今平均日销",
                 "近30天平均日销售",
                 "库存数量",
@@ -282,9 +356,11 @@ def _build_store_sales_ranking_transfer_frame(
                 "brand": "品牌",
                 "product": "商品名称",
             "item_sales_amount": item_amount_header,
-                "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
-                "daily_sales_30d": "近30天平均日销售",
-                "inventory_qty": "库存数量",
+            "unit_price": "商品单价",
+            "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
+            "daily_sales_30d": "近30天平均日销售",
+            "inventory_qty": "库存数量",
+            "inventory_amount": "库存金额",
             "out_of_stock": "缺货",
             "risk_level": "风险等级",
             "turnover_days": "库存周转天数",
@@ -298,7 +374,9 @@ def _build_store_sales_ranking_transfer_frame(
             "商品条码",
             "商品名称",
             item_amount_header,
+            "商品单价",
             "调货数量",
+            "库存金额",
             "近三月+本月迄今平均日销",
             "近30天平均日销售",
             "库存数量",
@@ -310,6 +388,8 @@ def _build_store_sales_ranking_transfer_frame(
     # 销售额在该汇总页只保留 1 位小数，满足业务展示要求。
     transfer_out[store_amount_header] = pd.to_numeric(transfer_out[store_amount_header], errors="coerce").round(1)
     transfer_out[item_amount_header] = pd.to_numeric(transfer_out[item_amount_header], errors="coerce").round(1)
+    transfer_out["商品单价"] = pd.to_numeric(transfer_out["商品单价"], errors="coerce").round(1)
+    transfer_out["库存金额"] = pd.to_numeric(transfer_out["库存金额"], errors="coerce").round(1)
     return transfer_out.sort_values(
         ["排名", "门店名称", "品牌", "商品名称", "商品条码"],
         ascending=[True, True, True, True, True],

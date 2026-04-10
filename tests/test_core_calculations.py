@@ -668,14 +668,14 @@ class CoreCalculationsTest(unittest.TestCase):
         )
         sales_df = pd.DataFrame(
             {
-                "store": ["门店A", "门店A"],
-                "store_code": ["S1", "S1"],
-                "product": ["SKU1", "SKU2"],
-                "barcode": ["6901", "6902"],
-                "product_code": ["P1", "P2"],
-                "sales_qty": [0, 5],
-                "sales_amount": [100.0, 50.0],
-                "sales_date": pd.to_datetime(["2026-02-01", "2026-02-02"]),
+                "store": ["门店A", "门店A", "门店B"],
+                "store_code": ["S1", "S1", "S2"],
+                "product": ["SKU1", "SKU2", "SKU1"],
+                "barcode": ["6901", "6902", "6901"],
+                "product_code": ["P1", "P2", "P1"],
+                "sales_qty": [0, 5, 20],
+                "sales_amount": [100.0, 50.0, 300.0],
+                "sales_date": pd.to_datetime(["2026-02-01", "2026-02-02", "2026-01-15"]),
             }
         )
 
@@ -689,6 +689,8 @@ class CoreCalculationsTest(unittest.TestCase):
 
         self.assertEqual(out["门店销售额总计(2026-02-01至2026-02-02)"].tolist(), [150.0, 150.0])
         self.assertEqual(out["商品销售额(2026-02-01至2026-02-02)"].tolist(), [100.0, 50.0])
+        self.assertEqual(out["商品单价"].tolist(), [15.0, 10.0])
+        self.assertEqual(out["库存金额"].tolist(), [150.0, 200.0])
         self.assertEqual(out["调货数量"].tolist(), [10, 6])
         self.assertEqual(out["排名"].tolist(), [1, 1])
 
