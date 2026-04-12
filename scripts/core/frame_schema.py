@@ -5,6 +5,7 @@ from typing import Iterable
 
 import pandas as pd
 
+from . import frame_columns as core_frame_columns
 
 @dataclass(frozen=True)
 class FrameSchema:
@@ -52,20 +53,8 @@ def validate_named_frames(frames: Iterable[tuple[str, pd.DataFrame]], schema_map
 
 NORMALIZED_SALES_SCHEMA = FrameSchema(
     name="input.sales.normalized",
-    required_columns=(
-        "store",
-        "product",
-        "barcode",
-        "sales_qty",
-        "sales_date",
-        "brand",
-        "store_code",
-        "product_code",
-        "display_barcode",
-        "supplier_card",
-        "sales_amount",
-    ),
-    optional_columns=("national_barcode",),
+    required_columns=core_frame_columns.NORMALIZED_SALES_REQUIRED_COLUMNS,
+    optional_columns=core_frame_columns.NORMALIZED_SALES_OPTIONAL_COLUMNS,
     allow_unknown_columns=False,
     description="销售标准化结果，供窗口计算、匹配和销售额调货汇总复用。",
     column_descriptions={
@@ -86,16 +75,7 @@ NORMALIZED_SALES_SCHEMA = FrameSchema(
 
 NORMALIZED_INVENTORY_SCHEMA = FrameSchema(
     name="input.inventory.normalized",
-    required_columns=(
-        "store",
-        "brand",
-        "product",
-        "barcode",
-        "inventory_qty",
-        "store_code",
-        "product_code",
-        "supplier_card",
-    ),
+    required_columns=core_frame_columns.NORMALIZED_INVENTORY_REQUIRED_COLUMNS,
     allow_unknown_columns=False,
     description="库存标准化结果，供匹配、风险计算和输出表构建使用。",
     column_descriptions={
@@ -112,63 +92,15 @@ NORMALIZED_INVENTORY_SCHEMA = FrameSchema(
 
 MATCHING_DETAIL_SCHEMA = FrameSchema(
     name="analysis.matching.detail",
-    required_columns=(
-        "store_key",
-        "product_key",
-        "store",
-        "brand",
-        "barcode",
-        "barcode_output",
-        "product",
-        "daily_sales_3m_mtd",
-        "daily_sales_30d",
-        "forecast_daily_sales",
-        "inventory_qty",
-        "supplier_card",
-        "province",
-        "risk_level",
-        "inventory_sales_ratio",
-        "turnover_rate",
-        "turnover_days",
-        "name_source_rule",
-        "brand_source_rule",
-        "name_conflict_count",
-        "brand_conflict_count",
-    ),
+    required_columns=core_frame_columns.MATCHING_DETAIL_COLUMNS,
     allow_unknown_columns=False,
     description="销售库存匹配后的核心明细表，是后续动作建议和报表工作表的基础底表。",
 )
 
 MISSING_SALES_SCHEMA = FrameSchema(
     name="analysis.matching.missing_sales",
-    required_columns=(
-        "store_key",
-        "product_key",
-        "store",
-        "brand",
-        "product",
-        "barcode",
-        "display_barcode",
-        "daily_sales_3m_mtd",
-        "daily_sales_30d",
-        "forecast_daily_sales",
-        "supplier_card",
-        "province",
-    ),
-    optional_columns=(
-        "sales_qty_total",
-        "sales_qty_3m_mtd",
-        "sales_qty_30d",
-        "display_product_name",
-        "display_brand",
-        "name_source_ts",
-        "brand_source_ts",
-        "name_conflict_count",
-        "brand_conflict_count",
-        "record_rows",
-        "name_source_rule",
-        "brand_source_rule",
-    ),
+    required_columns=core_frame_columns.MISSING_SALES_REQUIRED_COLUMNS,
+    optional_columns=core_frame_columns.MISSING_SALES_OPTIONAL_COLUMNS,
     allow_unknown_columns=False,
     description="仅存在销售、库存表无记录且仍有预测销量的缺失 SKU 集合。",
 )

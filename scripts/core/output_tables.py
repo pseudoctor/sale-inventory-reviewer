@@ -5,6 +5,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
+from . import frame_columns as core_frame_columns
 from . import frame_schema as core_frame_schema
 from . import io as core_io
 from .models import ReportFrames
@@ -44,7 +45,7 @@ def _build_usage_guide_frame() -> pd.DataFrame:
         ["建议调出数量", "建议调出数量是系统标准调出规则的结果。对于有销量的高库存商品，按高阈值库存保有量计算冗余库存；对于零销量积压SKU，则按配置决定保留安全库存后调出，或全部调出。", "建议调货清单直接使用这一列；门店销量排名调货汇总只在“近三月+本月迄今平均日销 = 0”场景下覆盖为全库存调出。"],
         ["易混概念区分", "缺货清单 != 库存缺失SKU清单 != 建议补货清单 != 建议调货清单 != 门店销量排名调货汇总。缺货是库存为0；库存缺失是库存表无记录；建议补货是需要补货的全集；建议调货是按系统标准调出规则产生的调货动作；门店销量排名调货汇总是在调货动作基础上叠加门店销售额排名和“零中期销量全调”口径后的管理视图。", "看动作时先分清表的口径，再决定是否执行补货或调货。"],
     ]
-    return pd.DataFrame(rows, columns=["模块", "说明", "使用建议"])
+    return pd.DataFrame(rows, columns=core_frame_columns.USAGE_GUIDE_COLUMNS)
 
 
 def _attach_factor_and_case_count(
@@ -96,7 +97,7 @@ def _attach_factor_and_case_count(
 
 
 def _build_item_columns(enable_province_column: bool, trailing_columns: List[str]) -> List[str]:
-    columns = ["门店名称", "品牌", "商品条码", "商品名称"]
+    columns = list(core_frame_columns.DETAIL_BASE_COLUMNS)
     if enable_province_column:
         columns.append("省份")
     columns.extend(trailing_columns)
@@ -135,21 +136,7 @@ def _build_summary_frames(
         }
     )
     detail_out["商品条码"] = detail_out["商品条码"].apply(lambda x: core_io.normalize_barcode_value(x) or "")
-    detail_out = detail_out[_build_item_columns(
-        enable_province_column,
-        [
-            "近三月+本月迄今平均日销",
-            "近30天平均日销售",
-            "库存数量",
-            "缺货",
-            "风险等级",
-            "库存/销售比",
-            "库存周转率",
-            "库存周转天数",
-            "建议调出数量",
-            "建议补货数量",
-        ],
-    )]
+    detail_out = detail_out[_build_item_columns(enable_province_column, list(core_frame_columns.DETAIL_METRIC_COLUMNS))]
 
     store_summary_out = store_summary.rename(
         columns={
@@ -163,19 +150,7 @@ def _build_summary_frames(
             "turnover_rate": "库存周转率",
             "turnover_days": "库存周转天数",
         }
-    )[
-        [
-            "门店名称",
-            "近三月+本月迄今平均日销",
-            "近30天平均日销售",
-            "预测平均日销(季节模式后)",
-            "库存数量",
-            "库存/销售比",
-            "库存周转率",
-            "库存周转天数",
-            "风险等级",
-        ]
-    ]
+    )[list(core_frame_columns.STORE_SUMMARY_COLUMNS)]
     store_summary_out["预测平均日销(季节模式后)"] = pd.to_numeric(
         store_summary_out["预测平均日销(季节模式后)"], errors="coerce"
     ).round(3)
@@ -192,19 +167,7 @@ def _build_summary_frames(
             "turnover_rate": "库存周转率",
             "turnover_days": "库存周转天数",
         }
-    )[
-        [
-            "品牌",
-            "近三月+本月迄今平均日销",
-            "近30天平均日销售",
-            "预测平均日销(季节模式后)",
-            "库存数量",
-            "库存/销售比",
-            "库存周转率",
-            "库存周转天数",
-            "风险等级",
-        ]
-    ]
+    )[list(core_frame_columns.BRAND_SUMMARY_COLUMNS)]
     brand_summary_out["预测平均日销(季节模式后)"] = pd.to_numeric(
         brand_summary_out["预测平均日销(季节模式后)"], errors="coerce"
     ).round(3)
@@ -359,9 +322,7 @@ def _build_product_code_catalog_frame(product_code_catalog: pd.DataFrame) -> pd.
             "inventory_product_name": "库存商品名",
             "source_status": "来源状态",
         }
-    )[
-        ["商品编码", "品牌", "标准商品名", "销售表商品名", "库存商品名", "来源状态"]
-    ]
+    )[list(core_frame_columns.PRODUCT_CODE_CATALOG_COLUMNS)]
 
 
 def build_report_frames(

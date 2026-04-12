@@ -34,3 +34,5 @@
 - 再次验证 `./venv/bin/python -m pytest -q`，结果为 `100 passed in 2.93s`。
 - 已新增 `frame_schema.py`，并把销售、库存、匹配结果、报表工作表接入列级 schema 校验。
 - 再次验证 `./venv/bin/python -m pytest -q`，结果为 `101 passed in 2.94s`。
+- 已新增 `frame_columns.py`，将关键内部表与工作表列集合提炼为命名常量，并让 schema、构造代码、测试共用同一份列契约。
+- 再次验证 `./venv/bin/python -m pytest -q`，结果为 `103 passed in 3.07s`。

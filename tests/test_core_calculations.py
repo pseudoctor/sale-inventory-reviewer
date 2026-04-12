@@ -8,6 +8,7 @@ import pandas as pd
 
 from scripts.generate_inventory_risk_report import generate_report_for_system
 from scripts.core.config import validate_config
+from scripts.core import frame_columns as core_frame_columns
 from scripts.core import io as core_io
 from scripts.core import matching as core_matching
 from scripts.core.metrics import apply_inventory_metrics, classify_risk_levels, combine_daily_sales, overlap_days
@@ -30,15 +31,8 @@ def _read_overview_group(output_file: Path, group_name: str) -> pd.DataFrame:
 class CoreCalculationsTest(unittest.TestCase):
     def test_usage_guide_frame_contains_key_logic_rows(self):
         frames = core_output_tables.build_report_frames(
-            detail=pd.DataFrame(columns=[
-                "store", "brand", "barcode_output", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d",
-                "inventory_qty", "out_of_stock", "risk_level", "inventory_sales_ratio", "turnover_rate",
-                "turnover_days", "suggest_outbound_qty", "suggest_replenish_qty", "name_source_rule",
-                "brand_source_rule", "name_conflict_count", "brand_conflict_count",
-            ]),
-            missing_sales=pd.DataFrame(columns=[
-                "store", "brand", "display_barcode", "barcode", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d",
-            ]),
+            detail=pd.DataFrame(columns=list(core_frame_columns.REPORT_FRAME_DETAIL_INPUT_COLUMNS)),
+            missing_sales=pd.DataFrame(columns=list(core_frame_columns.MISSING_SALES_REQUIRED_COLUMNS + core_frame_columns.MISSING_SALES_OPTIONAL_COLUMNS)),
             store_summary=pd.DataFrame(columns=[
                 "store", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales", "inventory_qty",
                 "risk_level", "inventory_sales_ratio", "turnover_rate", "turnover_days",
@@ -337,15 +331,8 @@ class CoreCalculationsTest(unittest.TestCase):
 
     def test_build_report_frames_returns_report_frames_object(self):
         frames = core_output_tables.build_report_frames(
-            detail=pd.DataFrame(columns=[
-                "store", "brand", "barcode_output", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d",
-                "inventory_qty", "out_of_stock", "risk_level", "inventory_sales_ratio", "turnover_rate",
-                "turnover_days", "suggest_outbound_qty", "suggest_replenish_qty", "name_source_rule",
-                "brand_source_rule", "name_conflict_count", "brand_conflict_count",
-            ]),
-            missing_sales=pd.DataFrame(columns=[
-                "store", "brand", "display_barcode", "barcode", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d",
-            ]),
+            detail=pd.DataFrame(columns=list(core_frame_columns.REPORT_FRAME_DETAIL_INPUT_COLUMNS)),
+            missing_sales=pd.DataFrame(columns=list(core_frame_columns.MISSING_SALES_REQUIRED_COLUMNS + core_frame_columns.MISSING_SALES_OPTIONAL_COLUMNS)),
             store_summary=pd.DataFrame(columns=[
                 "store", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales", "inventory_qty",
                 "risk_level", "inventory_sales_ratio", "turnover_rate", "turnover_days",
@@ -398,6 +385,7 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(core_frame_schema.NORMALIZED_SALES_SCHEMA.name, "input.sales.normalized")
         self.assertTrue(core_frame_schema.NORMALIZED_SALES_SCHEMA.description)
         self.assertIn("sales_amount", core_frame_schema.NORMALIZED_SALES_SCHEMA.column_descriptions)
+        self.assertEqual(core_frame_schema.NORMALIZED_SALES_SCHEMA.required_columns, core_frame_columns.NORMALIZED_SALES_REQUIRED_COLUMNS)
 
     def test_normalize_inventory_df_supports_current_inventory_column(self):
         df = pd.DataFrame(
