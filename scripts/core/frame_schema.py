@@ -101,7 +101,7 @@ REPORT_FRAME_DETAIL_INPUT_SCHEMA = FrameSchema(
     name="report.detail_input",
     required_columns=core_frame_columns.REPORT_FRAME_DETAIL_INPUT_COLUMNS,
     optional_columns=core_frame_columns.REPORT_FRAME_DETAIL_OPTIONAL_COLUMNS,
-    allow_unknown_columns=False,
+    allow_unknown_columns=True,
     description="构建报表工作表前的推荐后明细表，必须包含动作建议与缺货标记列。",
 )
 

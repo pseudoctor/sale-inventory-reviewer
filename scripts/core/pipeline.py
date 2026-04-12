@@ -289,7 +289,7 @@ def _build_analysis_stage(ctx: ReportRunContext, inputs: InputStageResult) -> An
     )
 
 
-def _build_output_stage(ctx: ReportRunContext, inputs: InputStageResult, analysis: AnalysisStageResult) -> OutputStageResult:
+def _build_output_stage(ctx: ReportRunContext, analysis: AnalysisStageResult) -> OutputStageResult:
     """输出组装阶段：准备工作表集合和执行总览。"""
     executive_overview_out = core_pipeline_outputs.build_executive_overview_frame(analysis.summary_out, analysis.status_out)
     return OutputStageResult(
@@ -344,7 +344,7 @@ def generate_report_for_system(
     ctx = _build_run_context(config, base_dir=base_dir, program_version=program_version)
     inputs = _prepare_input_stage(ctx)
     analysis = _build_analysis_stage(ctx, inputs)
-    outputs = _build_output_stage(ctx, inputs, analysis)
+    outputs = _build_output_stage(ctx, analysis)
     _write_report_stage(ctx, outputs)
 
     print(f"[{ctx.display_name}] Report saved: {ctx.output_file}")

@@ -336,7 +336,7 @@ def build_report_frames(
     is_wumei_system: bool,
     enable_province_column: bool,
     use_peak_mode: bool,
-) -> Dict[str, pd.DataFrame]:
+) -> ReportFrames:
     """构建全部报表工作表数据，并以显式结果对象返回。"""
     core_frame_schema.validate_frame_columns(detail, core_frame_schema.REPORT_FRAME_DETAIL_INPUT_SCHEMA)
     usage_guide_out = _build_usage_guide_frame()

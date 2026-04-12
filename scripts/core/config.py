@@ -254,7 +254,7 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
 
 def build_system_config(system_cfg: BatchSystemConfig, global_cfg: AppConfig) -> AppConfig:
     """将全局配置与单个系统配置合并为最终运行配置。"""
-    merged = dict(global_cfg)
+    merged = deepcopy(global_cfg)
     merged["enabled"] = bool(system_cfg.get("enabled", True))
     merged["sales_files"] = list(system_cfg["sales_files"])
     merged["inventory_file"] = str(system_cfg["inventory_file"]).strip()
