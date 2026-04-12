@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 
 from . import config as core_config
+from . import frame_schema as core_frame_schema
 from . import io as core_io
 from . import metrics as core_metrics
 from .models import AppConfig, BarcodeMappingResult, InventoryPreparationResult, SalesLoadResult, WindowContext
@@ -124,7 +125,7 @@ def load_sales_data(
         df["sales_date"] = parsed_dates
         df = df[df["sales_date"].notna()].copy()
 
-        sales_data.append(df)
+        sales_data.append(core_frame_schema.validate_frame_columns(df, core_frame_schema.NORMALIZED_SALES_SCHEMA))
         loaded_sales_file_count += 1
 
     if not sales_data:
@@ -137,7 +138,7 @@ def load_sales_data(
             "Please check sales date values and sales_date_format/sales_date_dayfirst settings."
         )
     return SalesLoadResult(
-        sales_df=sales_df,
+        sales_df=core_frame_schema.validate_frame_columns(sales_df, core_frame_schema.NORMALIZED_SALES_SCHEMA),
         loaded_sales_file_count=loaded_sales_file_count,
         missing_sales_files=missing_sales_files,
         invalid_sales_date_rows=invalid_sales_date_rows,
@@ -242,7 +243,7 @@ def prepare_inventory_data(
     inv_df["supplier_card"] = inv_df["supplier_card"].apply(core_io.normalize_supplier_card_value)
 
     return InventoryPreparationResult(
-        inventory_df=inv_df,
+        inventory_df=core_frame_schema.validate_frame_columns(inv_df, core_frame_schema.NORMALIZED_INVENTORY_SCHEMA),
         output_file=output_file,
         inventory_date_ts=inventory_date_ts,
         inventory_date=inventory_date,

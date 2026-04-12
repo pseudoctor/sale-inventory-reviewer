@@ -13,6 +13,7 @@ from scripts.core import matching as core_matching
 from scripts.core.metrics import apply_inventory_metrics, classify_risk_levels, combine_daily_sales, overlap_days
 from scripts.core import output_tables as core_output_tables
 from scripts.core import pipeline as core_pipeline
+from scripts.core import frame_schema as core_frame_schema
 from scripts.core import pipeline_inputs as core_pipeline_inputs
 from scripts.core import pipeline_outputs as core_pipeline_outputs
 from scripts.core import system_rules as core_system_rules
@@ -363,6 +364,40 @@ class CoreCalculationsTest(unittest.TestCase):
         )
         self.assertIsInstance(frames, ReportFrames)
         self.assertTrue(frames.usage_guide.equals(frames["使用说明"]))
+
+    def test_validate_frame_columns_reports_missing_required_columns(self):
+        with self.assertRaises(ValueError):
+            core_frame_schema.validate_frame_columns(
+                pd.DataFrame({"store": ["A店"]}),
+                core_frame_schema.NORMALIZED_SALES_SCHEMA,
+            )
+
+    def test_validate_frame_columns_reports_unexpected_columns_when_schema_is_strict(self):
+        with self.assertRaises(ValueError):
+            core_frame_schema.validate_frame_columns(
+                pd.DataFrame(
+                    {
+                        "store": ["A店"],
+                        "product": ["SKU1"],
+                        "barcode": ["6901"],
+                        "sales_qty": [1],
+                        "sales_date": [pd.Timestamp("2026-02-01")],
+                        "brand": ["品牌A"],
+                        "store_code": ["1001"],
+                        "product_code": ["P1"],
+                        "display_barcode": ["6901"],
+                        "supplier_card": ["153085"],
+                        "sales_amount": [10.0],
+                        "unexpected_col": ["x"],
+                    }
+                ),
+                core_frame_schema.NORMALIZED_SALES_SCHEMA,
+            )
+
+    def test_frame_schema_contains_semantic_descriptions(self):
+        self.assertEqual(core_frame_schema.NORMALIZED_SALES_SCHEMA.name, "input.sales.normalized")
+        self.assertTrue(core_frame_schema.NORMALIZED_SALES_SCHEMA.description)
+        self.assertIn("sales_amount", core_frame_schema.NORMALIZED_SALES_SCHEMA.column_descriptions)
 
     def test_normalize_inventory_df_supports_current_inventory_column(self):
         df = pd.DataFrame(

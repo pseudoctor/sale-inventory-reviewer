@@ -4,6 +4,7 @@ from typing import Callable
 
 import pandas as pd
 
+from . import frame_schema as core_frame_schema
 from . import io as core_io
 from . import metrics as core_metrics
 from .models import MatchingResult
@@ -299,8 +300,8 @@ def build_detail_with_matching(
         "mapping_coverage_rate": mapping_coverage_rate,
     }
     return MatchingResult(
-        detail=detail,
-        missing_sales=missing_sales,
+        detail=core_frame_schema.validate_frame_columns(detail, core_frame_schema.MATCHING_DETAIL_SCHEMA),
+        missing_sales=core_frame_schema.validate_frame_columns(missing_sales, core_frame_schema.MISSING_SALES_SCHEMA),
         store_summary=store_summary,
         brand_summary=brand_summary,
         mapping_stats=mapping_stats,

@@ -32,3 +32,5 @@
 - 再次验证 `./venv/bin/python -m pytest -q`，结果为 `100 passed in 2.93s`。
 - 已将 `models.py` 中大量 `Any` 收紧为 `pd.DataFrame`、`Path`、`pd.Timestamp` 和明确的结果对象类型，减少类型噪音。
 - 再次验证 `./venv/bin/python -m pytest -q`，结果为 `100 passed in 2.93s`。
+- 已新增 `frame_schema.py`，并把销售、库存、匹配结果、报表工作表接入列级 schema 校验。
+- 再次验证 `./venv/bin/python -m pytest -q`，结果为 `101 passed in 2.94s`。

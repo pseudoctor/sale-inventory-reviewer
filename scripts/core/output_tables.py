@@ -5,6 +5,7 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
+from . import frame_schema as core_frame_schema
 from . import io as core_io
 from .models import ReportFrames
 
@@ -399,7 +400,7 @@ def build_report_frames(
     )
     product_code_catalog_out = _build_product_code_catalog_frame(product_code_catalog)
 
-    return ReportFrames(
+    report_frames = ReportFrames(
         usage_guide=usage_guide_out,
         detail=detail_out,
         store_summary=store_summary_out,
@@ -410,3 +411,5 @@ def build_report_frames(
         transfer=transfer_out,
         product_code_catalog=product_code_catalog_out,
     )
+    core_frame_schema.validate_named_frames(report_frames.items(), core_frame_schema.REPORT_FRAME_SCHEMAS)
+    return report_frames
