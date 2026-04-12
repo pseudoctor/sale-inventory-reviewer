@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, cast
 
 import yaml
+
+from .models import AppConfig, BatchSystemConfig
 
 DEFAULT_LEGACY_OUTPUT_FILES = {
     "./reports/inventory_risk_report.xlsx",
@@ -13,7 +15,7 @@ DEFAULT_LEGACY_OUTPUT_FILES = {
 }
 AUTO_OUTPUT_DATE_PLACEHOLDER = "{库存日期}"
 
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG: AppConfig = {
     "run_mode": "single",
     "display_name": "",
     "system_id": "",
@@ -46,7 +48,7 @@ DEFAULT_CONFIG = {
 }
 
 
-def _validate_bool_field(config: Dict[str, Any], key: str, default: bool, error_message: str) -> bool:
+def _validate_bool_field(config: AppConfig, key: str, default: bool, error_message: str) -> bool:
     """校验布尔配置项，非法时抛出明确错误。"""
     value = config.get(key, default)
     if not isinstance(value, bool):
@@ -72,7 +74,7 @@ def _normalize_sales_file_entries(entries: list[str], field_name: str) -> list[s
     return normalized
 
 
-def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
+def validate_config(config: AppConfig) -> AppConfig:
     """校验并规范化主配置，供单系统和批量模式共用。"""
     run_mode = str(config.get("run_mode", "single")).strip().lower()
     if run_mode not in {"single", "batch"}:
@@ -187,10 +189,10 @@ def validate_config(config: Dict[str, Any]) -> Dict[str, Any]:
     batch["summary_output_file"] = summary_output_file
     batch["systems"] = systems
     config["batch"] = batch
-    return config
+    return cast(AppConfig, config)
 
 
-def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
+def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
     """校验批量模式下每个系统的关键配置约束。"""
     batch_cfg = config.get("batch", {})
     systems = batch_cfg.get("systems", [])
@@ -204,10 +206,11 @@ def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
     for idx, system in enumerate(systems, start=1):
         if not isinstance(system, dict):
             raise ValueError(f"batch.systems[{idx}] must be a dict.")
-        enabled = system.get("enabled", True)
+        typed_system = cast(BatchSystemConfig, system)
+        enabled = typed_system.get("enabled", True)
         if not isinstance(enabled, bool):
             raise ValueError(f"batch.systems[{idx}].enabled must be true/false.")
-        display_name = system.get("display_name")
+        display_name = typed_system.get("display_name")
         if not isinstance(display_name, str) or not display_name.strip():
             raise ValueError(f"batch.systems[{idx}].display_name must be a non-empty string.")
         display_name = display_name.strip()
@@ -215,7 +218,7 @@ def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
             raise ValueError(f"Duplicated display_name in batch.systems: {display_name}")
         seen_display_names.add(display_name)
 
-        system_id = str(system.get("system_id", "")).strip() or display_name
+        system_id = str(typed_system.get("system_id", "")).strip() or display_name
         if system_id in seen_ids:
             raise ValueError(f"Duplicated identity in batch.systems: {system_id}")
         seen_ids.add(system_id)
@@ -224,21 +227,21 @@ def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
         if not enabled:
             continue
 
-        sales_files = system.get("sales_files")
+        sales_files = typed_system.get("sales_files")
         if not isinstance(sales_files, list) or not sales_files:
             raise ValueError(f"batch.systems[{idx}].sales_files must be a non-empty list.")
         if not all(isinstance(x, str) and x.strip() for x in sales_files):
             raise ValueError(f"batch.systems[{idx}].sales_files entries must be non-empty strings.")
-        system["sales_files"] = _normalize_sales_file_entries(
+        typed_system["sales_files"] = _normalize_sales_file_entries(
             sales_files,
             f"batch.systems[{idx}].sales_files",
         )
 
-        inv_file = system.get("inventory_file")
+        inv_file = typed_system.get("inventory_file")
         if not isinstance(inv_file, str) or not inv_file.strip():
             raise ValueError(f"batch.systems[{idx}].inventory_file must be a non-empty string.")
 
-        out_file = system.get("output_file")
+        out_file = typed_system.get("output_file")
         if out_file is not None:
             if not isinstance(out_file, str) or not out_file.strip():
                 raise ValueError(f"batch.systems[{idx}].output_file must be a non-empty string if provided.")
@@ -249,7 +252,7 @@ def validate_batch_config(config: Dict[str, Any], base_dir: Path) -> None:
             seen_output_paths.add(normalized)
 
 
-def build_system_config(system_cfg: Dict[str, Any], global_cfg: Dict[str, Any]) -> Dict[str, Any]:
+def build_system_config(system_cfg: BatchSystemConfig, global_cfg: AppConfig) -> AppConfig:
     """将全局配置与单个系统配置合并为最终运行配置。"""
     merged = dict(global_cfg)
     merged["enabled"] = bool(system_cfg.get("enabled", True))
@@ -270,12 +273,12 @@ def build_system_config(system_cfg: Dict[str, Any], global_cfg: Dict[str, Any]) 
     if "province_column_enabled" in system_cfg:
         merged["province_column_enabled"] = system_cfg.get("province_column_enabled")
 
-    return validate_config(merged)
+    return validate_config(cast(AppConfig, merged))
 
 
-def load_config(config_path: Path) -> Dict[str, Any]:
+def load_config(config_path: Path) -> AppConfig:
     """从 YAML 读取配置并套用默认值。"""
-    config = deepcopy(DEFAULT_CONFIG)
+    config = cast(AppConfig, deepcopy(DEFAULT_CONFIG))
     if config_path.exists():
         with open(config_path, "r", encoding="utf-8") as f:
             loaded = yaml.safe_load(f) or {}
@@ -287,7 +290,7 @@ def load_config(config_path: Path) -> Dict[str, Any]:
     return validate_config(config)
 
 
-def resolve_system_raw_data_dir(config: Dict[str, Any], base_dir: Path) -> Path:
+def resolve_system_raw_data_dir(config: AppConfig, base_dir: Path) -> Path:
     raw_data_dir = Path(config["raw_data_dir"])
     if not raw_data_dir.is_absolute():
         raw_data_dir = (base_dir / raw_data_dir).resolve()
@@ -299,7 +302,7 @@ def resolve_system_raw_data_dir(config: Dict[str, Any], base_dir: Path) -> Path:
     return raw_data_dir
 
 
-def resolve_output_file_path(config: Dict[str, Any], display_name: str, inventory_date: str, base_dir: Path) -> Path:
+def resolve_output_file_path(config: AppConfig, display_name: str, inventory_date: str, base_dir: Path) -> Path:
     configured_output = str(config.get("output_file", "")).strip()
     if not configured_output or configured_output in DEFAULT_LEGACY_OUTPUT_FILES:
         configured_output = f"./reports/{display_name}{inventory_date.replace('-', '')}库存预警.xlsx"
@@ -309,7 +312,7 @@ def resolve_output_file_path(config: Dict[str, Any], display_name: str, inventor
     return path
 
 
-def resolve_expected_output_for_status(config: Dict[str, Any], display_name: str, base_dir: Path) -> str:
+def resolve_expected_output_for_status(config: AppConfig | BatchSystemConfig, display_name: str, base_dir: Path) -> str:
     configured_output = str(config.get("output_file", "")).strip()
     if not configured_output or configured_output in DEFAULT_LEGACY_OUTPUT_FILES:
         configured_output = f"./reports/{display_name}{AUTO_OUTPUT_DATE_PLACEHOLDER}库存预警.xlsx"

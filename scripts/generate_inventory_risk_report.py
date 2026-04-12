@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional
 import sys
 
 if __package__ in {None, ""}:
@@ -15,6 +15,7 @@ from scripts.core import batch as core_batch
 from scripts.core import config as core_config
 from scripts.core import io as core_io
 from scripts.core import metrics as core_metrics
+from scripts.core.models import AppConfig, ReportRunResult
 from scripts.core import output_tables as core_output_tables
 from scripts.core import pipeline as core_pipeline
 
@@ -22,7 +23,7 @@ BASE_DIR = Path(__file__).parent.parent
 CONFIG_PATH = BASE_DIR / "config.yaml"
 PROGRAM_VERSION = "1.1.0"
 
-def load_config() -> Dict[str, Any]:
+def load_config() -> AppConfig:
     return core_config.load_config(CONFIG_PATH)
 
 # Keep these aliases for backward compatibility with tests and external imports.
@@ -78,7 +79,7 @@ __all__ = [
 ]
 
 
-def generate_report_for_system(system_cfg: Dict[str, Any], global_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def generate_report_for_system(system_cfg: AppConfig, global_cfg: Optional[AppConfig] = None) -> ReportRunResult:
     return core_pipeline.generate_report_for_system(
         system_cfg,
         global_cfg,
@@ -87,7 +88,7 @@ def generate_report_for_system(system_cfg: Dict[str, Any], global_cfg: Optional[
     )
 
 
-def run_batch(global_config: Dict[str, Any]) -> int:
+def run_batch(global_config: AppConfig) -> int:
     core_config.validate_batch_config(global_config, BASE_DIR)
     return core_batch.run_batch(
         global_config=global_config,

@@ -6,6 +6,7 @@ import pandas as pd
 
 from . import io as core_io
 from . import metrics as core_metrics
+from .models import MatchingResult
 
 
 def _prepare_match_keys(df: pd.DataFrame) -> pd.DataFrame:
@@ -92,7 +93,7 @@ def build_detail_with_matching(
     high_days: float,
     is_wumei_system: bool,
     province_mapper: Callable[[str | None], str],
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float]]:
+) -> MatchingResult:
     """将销售与库存按统一键匹配，产出明细、缺失SKU与汇总表。"""
     sales_df = _prepare_match_keys(sales_df)
     sales_3m_mtd = sales_df[(sales_df["sales_date"] >= mtd_start) & (sales_df["sales_date"] <= mtd_end)]
@@ -297,4 +298,10 @@ def build_detail_with_matching(
         "brand_conflict_keys": int((sales_mapping["brand_conflict_count"] > 1).sum()),
         "mapping_coverage_rate": mapping_coverage_rate,
     }
-    return detail, missing_sales, store_summary, brand_summary, mapping_stats
+    return MatchingResult(
+        detail=detail,
+        missing_sales=missing_sales,
+        store_summary=store_summary,
+        brand_summary=brand_summary,
+        mapping_stats=mapping_stats,
+    )

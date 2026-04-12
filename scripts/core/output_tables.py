@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from . import io as core_io
+from .models import ReportFrames
 
 
 def compute_case_counts(qty: pd.Series, factor: pd.Series, use_peak_mode: bool) -> pd.Series:
@@ -101,19 +102,14 @@ def _build_item_columns(enable_province_column: bool, trailing_columns: List[str
     return columns
 
 
-def build_report_frames(
+def _build_summary_frames(
     *,
     detail: pd.DataFrame,
-    missing_sales: pd.DataFrame,
     store_summary: pd.DataFrame,
     brand_summary: pd.DataFrame,
-    product_code_catalog: pd.DataFrame,
-    carton_factor_df: pd.DataFrame,
-    is_wumei_system: bool,
     enable_province_column: bool,
-    use_peak_mode: bool,
-) -> Dict[str, pd.DataFrame]:
-    usage_guide_out = _build_usage_guide_frame()
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """构建明细、门店汇总、品牌汇总三个基础工作表。"""
     detail_out = detail.rename(
         columns={
             "store": "门店名称",
@@ -138,7 +134,7 @@ def build_report_frames(
         }
     )
     detail_out["商品条码"] = detail_out["商品条码"].apply(lambda x: core_io.normalize_barcode_value(x) or "")
-    detail_output_columns = _build_item_columns(
+    detail_out = detail_out[_build_item_columns(
         enable_province_column,
         [
             "近三月+本月迄今平均日销",
@@ -152,8 +148,7 @@ def build_report_frames(
             "建议调出数量",
             "建议补货数量",
         ],
-    )
-    detail_out = detail_out[detail_output_columns]
+    )]
 
     store_summary_out = store_summary.rename(
         columns={
@@ -212,7 +207,17 @@ def build_report_frames(
     brand_summary_out["预测平均日销(季节模式后)"] = pd.to_numeric(
         brand_summary_out["预测平均日销(季节模式后)"], errors="coerce"
     ).round(3)
+    return detail_out, store_summary_out, brand_summary_out
 
+
+def _build_missing_and_action_frames(
+    *,
+    detail_out: pd.DataFrame,
+    missing_sales: pd.DataFrame,
+    is_wumei_system: bool,
+    enable_province_column: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """构建缺失SKU、缺货、补货、调货四类动作工作表。"""
     missing_sku_out = missing_sales[
         ["store", "brand", "display_barcode", "barcode", "product", "province", "daily_sales_3m_mtd", "daily_sales_30d"]
     ].rename(
@@ -259,34 +264,41 @@ def build_report_frames(
         missing_sku_out["建议补货数量"].fillna(missing_sku_out["建议补货数量_fallback"]).fillna(0).astype(int)
     )
     missing_sku_out = missing_sku_out.drop(columns=["建议补货数量_fallback"])
-
-    missing_output_columns = _build_item_columns(
+    missing_sku_out = missing_sku_out[_build_item_columns(
         enable_province_column,
         ["近三月+本月迄今平均日销", "近30天平均日销售", "建议补货数量"],
-    )
-    missing_sku_out = missing_sku_out[missing_output_columns]
+    )]
 
     out_of_stock_out = detail_out[detail_out["缺货"] == "是"].copy()
-    out_of_stock_columns = _build_item_columns(
+    out_of_stock_out = out_of_stock_out[_build_item_columns(
         enable_province_column,
         ["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "缺货", "风险等级", "建议补货数量"],
-    )
-    out_of_stock_out = out_of_stock_out[out_of_stock_columns]
+    )]
 
     replenish_out = detail_out[detail_out["建议补货数量"] > 0].copy()
-    replenish_output_columns = _build_item_columns(
+    replenish_out = replenish_out[_build_item_columns(
         enable_province_column,
         ["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "缺货", "风险等级", "建议补货数量"],
-    )
-    replenish_out = replenish_out[replenish_output_columns]
+    )]
 
     transfer_out = detail_out[detail_out["建议调出数量"] > 0].copy()
-    transfer_output_columns = _build_item_columns(
+    transfer_out = transfer_out[_build_item_columns(
         enable_province_column,
         ["近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "风险等级", "建议调出数量"],
-    )
-    transfer_out = transfer_out[transfer_output_columns]
+    )]
+    return missing_sku_out, out_of_stock_out, replenish_out, transfer_out
 
+
+def _attach_case_columns_to_action_frames(
+    *,
+    missing_sku_out: pd.DataFrame,
+    out_of_stock_out: pd.DataFrame,
+    replenish_out: pd.DataFrame,
+    transfer_out: pd.DataFrame,
+    carton_factor_df: pd.DataFrame,
+    use_peak_mode: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """为动作类工作表补充装箱因子与箱数列。"""
     factor_by_barcode = (
         carton_factor_df[carton_factor_df["商品条码"].notna()][["商品条码", "装箱数（因子）"]]
         .drop_duplicates(subset=["商品条码"], keep="first")
@@ -332,8 +344,12 @@ def build_report_frames(
         case_col=None,
         include_factor_col=True,
     )
+    return missing_sku_out, out_of_stock_out, replenish_out, transfer_out
 
-    product_code_catalog_out = product_code_catalog.rename(
+
+def _build_product_code_catalog_frame(product_code_catalog: pd.DataFrame) -> pd.DataFrame:
+    """构建商品编码对照清单工作表。"""
+    return product_code_catalog.rename(
         columns={
             "product_code": "商品编码",
             "brand": "品牌",
@@ -346,14 +362,51 @@ def build_report_frames(
         ["商品编码", "品牌", "标准商品名", "销售表商品名", "库存商品名", "来源状态"]
     ]
 
-    return {
-        "使用说明": usage_guide_out,
-        "明细": detail_out,
-        "门店汇总": store_summary_out,
-        "品牌汇总": brand_summary_out,
-        "缺货清单": out_of_stock_out,
-        "库存缺失SKU清单": missing_sku_out,
-        "建议补货清单": replenish_out,
-        "建议调货清单": transfer_out,
-        "商品编码对照清单": product_code_catalog_out,
-    }
+
+def build_report_frames(
+    *,
+    detail: pd.DataFrame,
+    missing_sales: pd.DataFrame,
+    store_summary: pd.DataFrame,
+    brand_summary: pd.DataFrame,
+    product_code_catalog: pd.DataFrame,
+    carton_factor_df: pd.DataFrame,
+    is_wumei_system: bool,
+    enable_province_column: bool,
+    use_peak_mode: bool,
+) -> Dict[str, pd.DataFrame]:
+    """构建全部报表工作表数据，并以显式结果对象返回。"""
+    usage_guide_out = _build_usage_guide_frame()
+    detail_out, store_summary_out, brand_summary_out = _build_summary_frames(
+        detail=detail,
+        store_summary=store_summary,
+        brand_summary=brand_summary,
+        enable_province_column=enable_province_column,
+    )
+    missing_sku_out, out_of_stock_out, replenish_out, transfer_out = _build_missing_and_action_frames(
+        detail_out=detail_out,
+        missing_sales=missing_sales,
+        is_wumei_system=is_wumei_system,
+        enable_province_column=enable_province_column,
+    )
+    missing_sku_out, out_of_stock_out, replenish_out, transfer_out = _attach_case_columns_to_action_frames(
+        missing_sku_out=missing_sku_out,
+        out_of_stock_out=out_of_stock_out,
+        replenish_out=replenish_out,
+        transfer_out=transfer_out,
+        carton_factor_df=carton_factor_df,
+        use_peak_mode=use_peak_mode,
+    )
+    product_code_catalog_out = _build_product_code_catalog_frame(product_code_catalog)
+
+    return ReportFrames(
+        usage_guide=usage_guide_out,
+        detail=detail_out,
+        store_summary=store_summary_out,
+        brand_summary=brand_summary_out,
+        out_of_stock=out_of_stock_out,
+        missing_sku=missing_sku_out,
+        replenish=replenish_out,
+        transfer=transfer_out,
+        product_code_catalog=product_code_catalog_out,
+    )
