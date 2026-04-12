@@ -135,11 +135,17 @@ def set_freeze_and_filter(ws, sheet_name: str) -> None:
 def style_headers(ws, header_fill: PatternFill, header_font: Font, center: Alignment) -> list:
     """应用表头样式并返回表头列表。"""
     headers = [c.value for c in ws[2]]
-    ws.row_dimensions[2].height = 22
+    has_wrapped_header = False
     for cell in ws[2]:
         cell.fill = header_fill
         cell.font = header_font
-        cell.alignment = center
+        header_text = str(cell.value)
+        if header_text.startswith("门店销售额总计(") or header_text.startswith("商品销售额("):
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            has_wrapped_header = True
+        else:
+            cell.alignment = center
+    ws.row_dimensions[2].height = 34 if has_wrapped_header else 22
     return headers
 
 
@@ -150,13 +156,19 @@ def apply_column_widths(ws) -> None:
         col_letter = ws.cell(row=2, column=col[0].column).column_letter
         header = ws.cell(row=2, column=col[0].column).value
         for cell in col:
+            if cell.row == 1:
+                continue
             if cell.value is None:
                 continue
             max_len = max(max_len, len(str(cell.value)))
         auto_width = max_len + 2
         preferred_width = resolve_preferred_width(header)
         if preferred_width is not None:
-            ws.column_dimensions[col_letter].width = max(preferred_width, min(auto_width, 40))
+            header_text = str(header)
+            if header_text.startswith("门店销售额总计(") or header_text.startswith("商品销售额("):
+                ws.column_dimensions[col_letter].width = min(preferred_width, max(12, auto_width))
+            else:
+                ws.column_dimensions[col_letter].width = max(preferred_width, min(auto_width, 40))
         else:
             ws.column_dimensions[col_letter].width = min(auto_width, 40)
 
