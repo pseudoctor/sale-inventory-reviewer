@@ -97,6 +97,14 @@ MATCHING_DETAIL_SCHEMA = FrameSchema(
     description="销售库存匹配后的核心明细表，是后续动作建议和报表工作表的基础底表。",
 )
 
+REPORT_FRAME_DETAIL_INPUT_SCHEMA = FrameSchema(
+    name="report.detail_input",
+    required_columns=core_frame_columns.REPORT_FRAME_DETAIL_INPUT_COLUMNS,
+    optional_columns=core_frame_columns.REPORT_FRAME_DETAIL_OPTIONAL_COLUMNS,
+    allow_unknown_columns=False,
+    description="构建报表工作表前的推荐后明细表，必须包含动作建议与缺货标记列。",
+)
+
 MISSING_SALES_SCHEMA = FrameSchema(
     name="analysis.matching.missing_sales",
     required_columns=core_frame_columns.MISSING_SALES_REQUIRED_COLUMNS,

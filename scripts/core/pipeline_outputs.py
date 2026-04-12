@@ -141,7 +141,7 @@ def build_status_frame(
         ["库存日期", status_input.inventory_date],
         ["输入销售文件数", status_input.loaded_sales_file_count],
         ["缺失销售文件数", len(status_input.missing_sales_files)],
-        ["输入文件总数", status_input.loaded_sales_file_count + 1],
+        ["输入文件总数", status_input.input_files_count],
         ["季节模式", "旺季(取高值)" if status_input.use_peak_mode else "淡季(取低值)"],
         ["严格自动扫描", "是" if status_input.strict_auto_scan else "否"],
         ["3M+MTD窗口有效", "是" if status_input.has_mtd_window_data else "否"],

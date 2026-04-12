@@ -28,7 +28,8 @@ class SystemRuleProfile:
 def resolve_system_rule_profile(display_name: str, config: AppConfig) -> SystemRuleProfile:
     """根据系统展示名和配置解析当前运行应使用的规则画像。"""
     normalized_display_name = str(display_name).strip()
-    is_wumei_system = "物美" in normalized_display_name
+    normalized_system_id = str(config.get("system_id", "")).strip().lower()
+    is_wumei_system = normalized_system_id.endswith("_wumei") or "wumei" in normalized_system_id or "物美" in normalized_display_name
     province_column_enabled_cfg = config.get("province_column_enabled", None)
     enable_province_column = (
         bool(province_column_enabled_cfg)

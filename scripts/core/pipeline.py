@@ -238,6 +238,7 @@ def _build_analysis_stage(ctx: ReportRunContext, inputs: InputStageResult) -> An
             display_name=ctx.display_name,
             system_id=ctx.system_id,
             inventory_date=ctx.inventory_date,
+            input_files_count=inputs.loaded_sales_file_count + len(inputs.missing_sales_files) + 1,
             loaded_sales_file_count=inputs.loaded_sales_file_count,
             missing_sales_files=inputs.missing_sales_files,
             use_peak_mode=ctx.use_peak_mode,

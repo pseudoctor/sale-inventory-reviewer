@@ -212,19 +212,24 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(core_pipeline.map_province_by_supplier_card(None), "其他/未知")
 
     def test_resolve_system_rule_profile_defaults_to_wumei_rules(self):
-        profile = core_system_rules.resolve_system_rule_profile("宁夏物美", {})
+        profile = core_system_rules.resolve_system_rule_profile("宁夏物美", {"system_id": "ningxia_wumei"})
         self.assertTrue(profile.is_wumei_system)
         self.assertTrue(profile.enable_province_column)
 
     def test_resolve_system_rule_profile_allows_explicit_override(self):
-        profile = core_system_rules.resolve_system_rule_profile("宁夏物美", {"province_column_enabled": False})
+        profile = core_system_rules.resolve_system_rule_profile("宁夏物美", {"system_id": "ningxia_wumei", "province_column_enabled": False})
         self.assertTrue(profile.is_wumei_system)
         self.assertFalse(profile.enable_province_column)
 
     def test_resolve_system_rule_profile_keeps_non_wumei_default_closed(self):
-        profile = core_system_rules.resolve_system_rule_profile("陕西华润", {})
+        profile = core_system_rules.resolve_system_rule_profile("陕西华润", {"system_id": "shaanxi_huarun"})
         self.assertFalse(profile.is_wumei_system)
         self.assertFalse(profile.enable_province_column)
+
+    def test_resolve_system_rule_profile_prefers_system_id_over_display_name(self):
+        profile = core_system_rules.resolve_system_rule_profile("宁夏北区", {"system_id": "ningxia_wumei"})
+        self.assertTrue(profile.is_wumei_system)
+        self.assertTrue(profile.enable_province_column)
 
     def test_compute_window_context_returns_dataclass(self):
         sales_df = pd.DataFrame({"sales_date": pd.to_datetime(["2026-02-01", "2026-02-09"])})
@@ -305,6 +310,7 @@ class CoreCalculationsTest(unittest.TestCase):
             display_name="测试系统",
             system_id="test",
             inventory_date="2026-02-09",
+            input_files_count=3,
             loaded_sales_file_count=1,
             missing_sales_files=[],
             use_peak_mode=False,
@@ -328,6 +334,8 @@ class CoreCalculationsTest(unittest.TestCase):
         )
         out = core_pipeline_outputs.build_status_frame(status_input)
         self.assertIn("程序版本", out["状态项"].tolist())
+        total = out.loc[out["状态项"] == "输入文件总数", "值"].iloc[0]
+        self.assertEqual(int(total), 3)
 
     def test_build_report_frames_returns_report_frames_object(self):
         frames = core_output_tables.build_report_frames(
@@ -379,6 +387,20 @@ class CoreCalculationsTest(unittest.TestCase):
                     }
                 ),
                 core_frame_schema.NORMALIZED_SALES_SCHEMA,
+            )
+
+    def test_build_report_frames_requires_recommendation_columns(self):
+        with self.assertRaises(ValueError):
+            core_output_tables.build_report_frames(
+                detail=pd.DataFrame(columns=list(core_frame_columns.MATCHING_DETAIL_COLUMNS)),
+                missing_sales=pd.DataFrame(columns=list(core_frame_columns.MISSING_SALES_REQUIRED_COLUMNS + core_frame_columns.MISSING_SALES_OPTIONAL_COLUMNS)),
+                store_summary=pd.DataFrame(columns=["store", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales", "inventory_qty", "risk_level", "inventory_sales_ratio", "turnover_rate", "turnover_days"]),
+                brand_summary=pd.DataFrame(columns=["brand", "daily_sales_3m_mtd", "daily_sales_30d", "forecast_daily_sales", "inventory_qty", "risk_level", "inventory_sales_ratio", "turnover_rate", "turnover_days"]),
+                product_code_catalog=pd.DataFrame(columns=["product_code", "brand", "standard_product_name", "sales_product_name", "inventory_product_name", "source_status"]),
+                carton_factor_df=pd.DataFrame(columns=["商品条码", "商品名称", "装箱数（因子）"]),
+                is_wumei_system=False,
+                enable_province_column=False,
+                use_peak_mode=False,
             )
 
     def test_frame_schema_contains_semantic_descriptions(self):

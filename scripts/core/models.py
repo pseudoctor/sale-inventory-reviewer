@@ -239,6 +239,7 @@ class StatusFrameInput:
     display_name: str
     system_id: str
     inventory_date: str
+    input_files_count: int
     loaded_sales_file_count: int
     missing_sales_files: list[str]
     use_peak_mode: bool

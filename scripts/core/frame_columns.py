@@ -52,10 +52,39 @@ MATCHING_DETAIL_COLUMNS: tuple[str, ...] = (
     "brand_conflict_count",
 )
 
-REPORT_FRAME_DETAIL_INPUT_COLUMNS: tuple[str, ...] = MATCHING_DETAIL_COLUMNS + (
+REPORT_FRAME_DETAIL_INPUT_COLUMNS: tuple[str, ...] = (
+    "store",
+    "brand",
+    "barcode_output",
+    "product",
+    "province",
+    "daily_sales_3m_mtd",
+    "daily_sales_30d",
+    "inventory_qty",
     "out_of_stock",
+    "risk_level",
+    "inventory_sales_ratio",
+    "turnover_rate",
+    "turnover_days",
     "suggest_outbound_qty",
     "suggest_replenish_qty",
+    "name_source_rule",
+    "brand_source_rule",
+    "name_conflict_count",
+    "brand_conflict_count",
+)
+
+REPORT_FRAME_DETAIL_OPTIONAL_COLUMNS: tuple[str, ...] = (
+    "store_key",
+    "product_key",
+    "barcode",
+    "forecast_daily_sales",
+    "supplier_card",
+    "daily_demand",
+    "low_target_qty",
+    "high_keep_qty",
+    "need_qty",
+    "outbound_rule",
 )
 
 MISSING_SALES_REQUIRED_COLUMNS: tuple[str, ...] = (

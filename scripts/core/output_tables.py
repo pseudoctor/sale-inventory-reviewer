@@ -338,6 +338,7 @@ def build_report_frames(
     use_peak_mode: bool,
 ) -> Dict[str, pd.DataFrame]:
     """构建全部报表工作表数据，并以显式结果对象返回。"""
+    core_frame_schema.validate_frame_columns(detail, core_frame_schema.REPORT_FRAME_DETAIL_INPUT_SCHEMA)
     usage_guide_out = _build_usage_guide_frame()
     detail_out, store_summary_out, brand_summary_out = _build_summary_frames(
         detail=detail,
