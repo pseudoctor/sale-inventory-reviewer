@@ -386,6 +386,7 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertTrue(core_frame_schema.NORMALIZED_SALES_SCHEMA.description)
         self.assertIn("sales_amount", core_frame_schema.NORMALIZED_SALES_SCHEMA.column_descriptions)
         self.assertEqual(core_frame_schema.NORMALIZED_SALES_SCHEMA.required_columns, core_frame_columns.NORMALIZED_SALES_REQUIRED_COLUMNS)
+        self.assertEqual(core_frame_schema.REPORT_FRAME_SCHEMAS["使用说明"].required_columns, core_frame_columns.USAGE_GUIDE_COLUMNS)
 
     def test_normalize_inventory_df_supports_current_inventory_column(self):
         df = pd.DataFrame(
