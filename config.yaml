@@ -53,7 +53,7 @@ batch:
   summary_output_file: "./reports/batch_run_summary.xlsx"
   systems:
     - enabled: true
-      system_id: "gansu_wumei"
+      system_id: "ningxia_wumei"
       display_name: "宁夏物美"
       province_column_enabled: true
       data_subdir: "宁夏物美"
@@ -75,9 +75,9 @@ batch:
         - "陕西华润销售202604.xlsx"
       inventory_file: "陕西华润库存.xlsx"
     - enabled: true
-      system_id: "gansu_huarun"
-      display_name: "甘肃华润"
-      data_subdir: "甘肃华润"
+      system_id: "ganning_huarun"
+      display_name: "甘宁华润"
+      data_subdir: "甘宁华润"
       sales_files:
         - "甘宁华润销售202601.xlsx"
         - "甘宁华润销售202602.xlsx"
