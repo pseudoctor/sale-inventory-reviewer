@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, cast
 
 import pandas as pd
 
@@ -83,7 +83,7 @@ def run_batch(
 
     for system in batch_cfg.get("systems", []):
         start_time = datetime.now()
-        typed_system = BatchSystemConfig(system)
+        typed_system = cast(BatchSystemConfig, system)
         enabled = bool(typed_system.get("enabled", True))
         display_name = str(typed_system.get("display_name", typed_system.get("system_id", "unknown")))
         system_id = str(typed_system.get("system_id", "")).strip() or display_name

@@ -149,11 +149,12 @@ def normalize_numeric_value(value) -> Optional[float]:
 
 
 def normalize_numeric_series(values: pd.Series) -> tuple[pd.Series, int]:
-    normalized = values.apply(normalize_numeric_value)
     raw_text = values.astype(str).str.strip()
     raw_non_empty = values.notna() & ~raw_text.str.lower().isin({"", "nan", "none"})
+    cleaned = raw_text.str.replace(",", "", regex=False).str.replace("，", "", regex=False)
+    normalized = pd.to_numeric(cleaned, errors="coerce")
     invalid_rows = int((raw_non_empty & normalized.isna()).sum())
-    return pd.to_numeric(normalized, errors="coerce").fillna(0), invalid_rows
+    return normalized.fillna(0), invalid_rows
 
 
 def pick_first_non_empty(series: pd.Series) -> Optional[str]:

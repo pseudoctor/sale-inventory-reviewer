@@ -121,8 +121,12 @@ def build_detail_with_matching(
     )
     sales_totals["sales_qty_3m_mtd"] = sales_totals["sales_qty_3m_mtd"].fillna(0)
     sales_totals["sales_qty_30d"] = sales_totals["sales_qty_30d"].fillna(0)
-    sales_totals["daily_sales_3m_mtd"] = sales_totals["sales_qty_3m_mtd"] / mtd_days if has_mtd_window_data else 0
-    sales_totals["daily_sales_30d"] = sales_totals["sales_qty_30d"] / recent_days_natural if has_recent_window_data else 0
+    sales_totals["daily_sales_3m_mtd"] = (
+        sales_totals["sales_qty_3m_mtd"] / mtd_days if has_mtd_window_data else 0
+    )
+    sales_totals["daily_sales_30d"] = (
+        sales_totals["sales_qty_30d"] / recent_days_natural if has_recent_window_data else 0
+    )
     sales_totals["forecast_daily_sales"] = core_metrics.combine_daily_sales(
         sales_totals["daily_sales_3m_mtd"],
         sales_totals["daily_sales_30d"],

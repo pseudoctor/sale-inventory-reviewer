@@ -8,6 +8,10 @@ import pandas as pd
 
 BASE_SINGLE_CONFIG: Dict[str, Any] = {
     "run_mode": "single",
+    "raw_data_dir": "./raw_data",
+    "output_file": "./reports/inventory_risk_report.xlsx",
+    "sales_files": [],
+    "inventory_file": "库存.xlsx",
     "risk_days_high": 60,
     "risk_days_low": 45,
     "sales_window_full_months": 3,
@@ -18,6 +22,12 @@ BASE_SINGLE_CONFIG: Dict[str, Any] = {
     "season_mode": False,
     "fail_on_empty_window": False,
     "strict_auto_scan": False,
+    "merge_detail_store_cells": True,
+    "enable_ranked_store_transfer_summary": False,
+    "stagnant_outbound_mode": "keep_safety_stock",
+    "stagnant_min_keep_qty": 0,
+    "carton_factor_file": "./data/sku装箱数.xlsx",
+    "brand_keywords": [],
 }
 
 BASE_BATCH_CONFIG: Dict[str, Any] = {

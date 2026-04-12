@@ -165,11 +165,4 @@ def build_status_frame(
     if status_input.missing_sales_files:
         status_rows.append(["缺失销售文件", " | ".join(status_input.missing_sales_files)])
 
-    # 物美条码映射状态先保留参数透传，后续真正启用逻辑时可直接扩展输出。
-    _ = status_input.is_wumei_system
-    _ = status_input.wumei_barcode_map_hits
-    _ = status_input.wumei_barcode_map_fallback
-    _ = status_input.wumei_barcode_map_conflicts
-    _ = status_input.wumei_barcode_conflict_samples
-
     return pd.DataFrame(status_rows, columns=["状态项", "值"])

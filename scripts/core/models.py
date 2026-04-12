@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterator, Literal, Mapping, TypedDict, TYPE_CHECKING
+from typing import Any, ClassVar, Iterator, Literal, Mapping, TypedDict, TYPE_CHECKING
 
 import pandas as pd
 
@@ -276,7 +276,7 @@ class ReportFrames:
     transfer: pd.DataFrame
     product_code_catalog: pd.DataFrame
 
-    _SHEET_NAME_MAP = {
+    _SHEET_NAME_MAP: ClassVar[dict[str, str]] = {
         "使用说明": "usage_guide",
         "明细": "detail",
         "门店汇总": "store_summary",
