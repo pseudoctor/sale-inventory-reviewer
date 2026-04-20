@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
 
+from scripts.core import output_tables as core_output_tables
 from scripts.generate_inventory_risk_report import generate_report_for_system
 
 
@@ -466,7 +467,7 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     detail = pd.read_excel(output_file, sheet_name="明细", header=1)
     detail["门店名称"] = detail["门店名称"].ffill()
     row = detail.iloc[0]
-    assert pd.isna(row["商品条码"])
+    assert str(row["商品条码"]) == "817620"
     assert row["省份"] == "其他/未知"
 
 
@@ -543,6 +544,48 @@ def test_detail_barcode_backfills_from_sales_by_product_code(tmp_path: Path):
     detail["门店名称"] = detail["门店名称"].ffill()
     row = detail.iloc[0]
     assert str(row["商品条码"]) == "6901234567890"
+
+
+def test_missing_sku_name_fallback_only_applies_for_unique_candidate():
+    detail_out = pd.DataFrame(
+        {
+            "门店名称": ["门店A", "门店A"],
+            "品牌": ["品牌C", "品牌C"],
+            "商品条码": ["6900000000001", "6900000000002"],
+            "商品名称": ["同名SKU", "同名SKU"],
+            "省份": ["其他/未知", "其他/未知"],
+            "近三月+本月迄今平均日销": [1.0, 2.0],
+            "近30天平均日销售": [1.0, 2.0],
+            "库存数量": [0, 0],
+            "缺货": ["是", "是"],
+            "风险等级": ["高", "高"],
+            "建议调出数量": [0, 0],
+            "建议补货数量": [6, 9],
+        }
+    )
+    missing_sales = pd.DataFrame(
+        {
+            "store": ["门店A"],
+            "brand": ["品牌C"],
+            "display_barcode": [None],
+            "barcode": ["P3"],
+            "product": ["同名SKU"],
+            "province": ["其他/未知"],
+            "daily_sales_3m_mtd": [3.0],
+            "daily_sales_30d": [3.0],
+        }
+    )
+
+    missing_sku_out, *_ = core_output_tables._build_missing_and_action_frames(
+        detail_out=detail_out,
+        missing_sales=missing_sales,
+        is_wumei_system=False,
+        enable_province_column=False,
+    )
+
+    assert len(missing_sku_out) == 1
+    assert missing_sku_out["商品条码"].iloc[0] == ""
+    assert int(missing_sku_out["建议补货数量"].iloc[0]) == 0
 
 
 def test_zero_sales_stagnant_inventory_generates_outbound_qty(tmp_path: Path):

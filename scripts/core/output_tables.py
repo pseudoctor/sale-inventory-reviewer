@@ -210,19 +210,25 @@ def _build_missing_and_action_frames(
     )
     replenish_lookup_fallback = (
         detail_out[["门店名称", "品牌", "商品名称", "建议补货数量"]]
-        .groupby(["门店名称", "品牌", "商品名称"], as_index=False)["建议补货数量"]
-        .max()
-        .rename(columns={"建议补货数量": "建议补货数量_fallback"})
+        .groupby(["门店名称", "品牌", "商品名称"], as_index=False)
+        .agg(
+            建议补货数量_fallback=("建议补货数量", "max"),
+            同名商品候选数=("建议补货数量", "size"),
+        )
     )
     missing_sku_out = missing_sku_out.merge(
         replenish_lookup_fallback,
         on=["门店名称", "品牌", "商品名称"],
         how="left",
     )
+    missing_sku_out["建议补货数量_fallback"] = missing_sku_out["建议补货数量_fallback"].where(
+        pd.to_numeric(missing_sku_out["同名商品候选数"], errors="coerce").fillna(0).eq(1),
+        None,
+    )
     missing_sku_out["建议补货数量"] = (
         missing_sku_out["建议补货数量"].fillna(missing_sku_out["建议补货数量_fallback"]).fillna(0).astype(int)
     )
-    missing_sku_out = missing_sku_out.drop(columns=["建议补货数量_fallback"])
+    missing_sku_out = missing_sku_out.drop(columns=["建议补货数量_fallback", "同名商品候选数"])
     missing_sku_out = missing_sku_out[_build_item_columns(
         enable_province_column,
         ["近三月+本月迄今平均日销", "近30天平均日销售", "建议补货数量"],

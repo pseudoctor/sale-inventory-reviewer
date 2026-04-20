@@ -21,6 +21,13 @@ def _prepare_match_keys(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _optional_barcode_series(df: pd.DataFrame, column: str) -> pd.Series:
+    """返回可选条码列；缺失时补全为全空序列，兼容旧调用方测试数据。"""
+    if column in df.columns:
+        return df[column]
+    return pd.Series([None] * len(df), index=df.index)
+
+
 def _coalesce_store_column(df: pd.DataFrame) -> pd.DataFrame:
     """统一 merge 后的门店列名，避免 store_x/store_y 泄漏到下游。"""
     out = df.copy()
@@ -182,6 +189,7 @@ def build_detail_with_matching(
     sales_totals = sales_totals.merge(sales_supplier, on=["store_key", "product_key"], how="left")
 
     inv_df = _prepare_match_keys(inv_df)
+    inv_df["actual_barcode"] = _optional_barcode_series(inv_df, "actual_barcode")
     inv_totals = (
         inv_df.groupby(["store_key", "product_key"], as_index=False)
         .agg(
@@ -253,6 +261,10 @@ def build_detail_with_matching(
         detail["barcode_output"].notna(),
         detail["inventory_actual_barcode"],
     )
+    detail["barcode_output"] = detail["barcode_output"].where(
+        detail["barcode_output"].notna(),
+        detail["barcode"],
+    )
     detail = _coalesce_store_column(detail)
 
     detail = core_metrics.apply_inventory_metrics(detail, low_days, high_days)
@@ -298,6 +310,10 @@ def build_detail_with_matching(
     missing_sales["display_barcode"] = missing_sales["display_barcode"].where(
         missing_sales["display_barcode"].notna(),
         missing_sales["sales_product_barcode"],
+    )
+    missing_sales["display_barcode"] = missing_sales["display_barcode"].where(
+        missing_sales["display_barcode"].notna(),
+        missing_sales["barcode"],
     )
 
     if not missing_sales.empty:
