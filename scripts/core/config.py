@@ -167,6 +167,10 @@ def validate_config(config: AppConfig) -> AppConfig:
         raise ValueError("brand_keywords must be a list.")
     if not all(isinstance(x, str) for x in brand_keywords):
         raise ValueError("brand_keywords entries must be strings.")
+    normalized_brand_keywords = [str(x).strip() for x in brand_keywords if str(x).strip()]
+    if not normalized_brand_keywords:
+        raise ValueError("brand_keywords must contain at least one non-empty string.")
+    config["brand_keywords"] = normalized_brand_keywords
 
     province_column_enabled = config.get("province_column_enabled", None)
     if province_column_enabled is not None and not isinstance(province_column_enabled, bool):

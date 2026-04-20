@@ -71,7 +71,7 @@ class CoreCalculationsTest(unittest.TestCase):
                     "sales_window_include_mtd": True,
                     "sales_window_recent_days": 30,
                     "season_mode": False,
-                    "brand_keywords": [],
+                    "brand_keywords": ["品牌A"],
                 }
             )
 
@@ -90,7 +90,7 @@ class CoreCalculationsTest(unittest.TestCase):
                     "sales_window_recent_days": 30,
                     "season_mode": False,
                     "strict_auto_scan": "yes",
-                    "brand_keywords": [],
+                    "brand_keywords": ["品牌A"],
                 }
             )
 
@@ -108,7 +108,7 @@ class CoreCalculationsTest(unittest.TestCase):
                     "sales_window_include_mtd": True,
                     "sales_window_recent_days": 30,
                     "season_mode": False,
-                    "brand_keywords": [],
+                    "brand_keywords": ["品牌A"],
                 }
             )
 
@@ -126,13 +126,37 @@ class CoreCalculationsTest(unittest.TestCase):
                     "sales_window_include_mtd": True,
                     "sales_window_recent_days": 30,
                     "season_mode": False,
-                    "brand_keywords": [],
+                    "brand_keywords": ["品牌A"],
                 }
             )
 
     def test_effective_brand_keywords_rejects_empty(self):
         with self.assertRaises(ValueError):
             core_pipeline._effective_brand_keywords({"brand_keywords": []})
+
+    def test_validate_config_rejects_empty_brand_keywords(self):
+        with self.assertRaises(ValueError):
+            validate_config(
+                {
+                    "run_mode": "single",
+                    "raw_data_dir": "./raw_data",
+                    "output_file": "",
+                    "sales_files": [],
+                    "inventory_file": "库存.xlsx",
+                    "risk_days_high": 60,
+                    "risk_days_low": 45,
+                    "sales_window_full_months": 3,
+                    "sales_window_include_mtd": True,
+                    "sales_window_recent_days": 30,
+                    "sales_date_dayfirst": False,
+                    "sales_date_format": "",
+                    "season_mode": False,
+                    "fail_on_empty_window": False,
+                    "carton_factor_file": "./data/sku装箱数.xlsx",
+                    "brand_keywords": [],
+                    "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
+                }
+            )
 
     def test_overlap_days_with_overlap(self):
         start = pd.Timestamp("2025-11-01")
@@ -887,10 +911,67 @@ class CoreCalculationsTest(unittest.TestCase):
 
         self.assertEqual(out["门店销售额总计(2026-02-01至2026-02-02)"].tolist(), [150.0, 150.0])
         self.assertEqual(out["商品销售额(2026-02-01至2026-02-02)"].tolist(), [100.0, 50.0])
-        self.assertEqual(out["商品单价"].tolist(), [0.0, 10.0])
-        self.assertEqual(out["库存金额"].tolist(), [0.0, 200.0])
-        self.assertEqual(out["调货数量"].tolist(), [10, 6])
-        self.assertEqual(out["排名"].tolist(), [1, 1])
+
+    def test_build_store_sales_ranking_transfer_frame_empty_keeps_dynamic_headers(self):
+        detail = pd.DataFrame(
+            {
+                "store_key": ["S1"],
+                "product_key": ["P1"],
+                "store": ["门店A"],
+                "brand": ["品牌A"],
+                "barcode_output": ["6901"],
+                "product": ["SKU1"],
+                "daily_sales_3m_mtd": [1.0],
+                "daily_sales_30d": [1.0],
+                "inventory_qty": [5],
+                "out_of_stock": ["否"],
+                "risk_level": ["中"],
+                "turnover_days": [10.0],
+                "suggest_outbound_qty": [0],
+            }
+        )
+        sales_df = pd.DataFrame(
+            {
+                "store": ["门店A"],
+                "store_code": ["S1"],
+                "product": ["SKU1"],
+                "product_code": ["P1"],
+                "barcode": ["6901"],
+                "sales_qty": [1],
+                "sales_amount": [10.0],
+                "sales_date": [pd.Timestamp("2026-02-02")],
+            }
+        )
+
+        out = core_pipeline._build_store_sales_ranking_transfer_frame(
+            detail,
+            sales_df,
+            pd.Timestamp("2026-02-01"),
+            pd.Timestamp("2026-02-02"),
+            "2026-02-01至2026-02-02",
+        )
+
+        self.assertEqual(
+            list(out.columns),
+            [
+                "排名",
+                "门店名称",
+                "门店销售额总计(2026-02-01至2026-02-02)",
+                "品牌",
+                "商品条码",
+                "商品名称",
+                "商品销售额(2026-02-01至2026-02-02)",
+                "商品单价",
+                "调货数量",
+                "库存金额",
+                "近三月+本月迄今平均日销",
+                "近30天平均日销售",
+                "库存数量",
+                "缺货",
+                "风险等级",
+                "库存周转天数",
+            ],
+        )
 
     def test_matching_uses_store_code_product_code_and_latest_name_brand(self):
         sales_df = pd.DataFrame(

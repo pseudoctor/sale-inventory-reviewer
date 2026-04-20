@@ -28,7 +28,7 @@ class BatchModeTest(unittest.TestCase):
             "season_mode": False,
             "fail_on_empty_window": False,
             "carton_factor_file": "./data/sku装箱数.xlsx",
-            "brand_keywords": [],
+            "brand_keywords": ["品牌A"],
             "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
         }
         out = core_config.validate_config(cfg)
@@ -50,7 +50,7 @@ class BatchModeTest(unittest.TestCase):
             "season_mode": False,
             "fail_on_empty_window": False,
             "carton_factor_file": "./data/sku装箱数.xlsx",
-            "brand_keywords": [],
+            "brand_keywords": ["品牌A"],
             "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
         }
         out = core_config.validate_config(cfg)
@@ -74,7 +74,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/sku装箱数.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "batch": {
                     "continue_on_error": True,
                     "summary_output_file": "./reports/batch_run_summary.xlsx",
@@ -116,7 +116,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/sku装箱数.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "batch": {
                     "continue_on_error": True,
                     "summary_output_file": "./reports/batch_run_summary.xlsx",
@@ -158,7 +158,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/sku装箱数.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "batch": {
                     "continue_on_error": True,
                     "summary_output_file": "./reports/batch_run_summary.xlsx",
@@ -202,7 +202,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/sku装箱数.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "batch": {
                     "continue_on_error": True,
                     "summary_output_file": "./reports/batch_run_summary.xlsx",
@@ -238,7 +238,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/sku装箱数.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "batch": {
                     "continue_on_error": True,
                     "summary_output_file": "./reports/batch_run_summary.xlsx",
@@ -274,7 +274,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/sku装箱数.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "batch": {
                     "continue_on_error": True,
                     "summary_output_file": "./reports/batch_run_summary.xlsx",
@@ -304,7 +304,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/global_carton.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
             }
         )
@@ -339,7 +339,7 @@ class BatchModeTest(unittest.TestCase):
                 "season_mode": False,
                 "fail_on_empty_window": False,
                 "carton_factor_file": "./data/global_carton.xlsx",
-                "brand_keywords": [],
+                "brand_keywords": ["品牌A"],
                 "province_column_enabled": False,
                 "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
             }
@@ -386,6 +386,7 @@ class BatchModeTest(unittest.TestCase):
                     continue_on_error=True,
                     summary_output_file=str(summary_path),
                     carton_factor_file="./data/carton.xlsx",
+                    brand_keywords=["品牌A"],
                     systems=[
                         {
                             "system_id": "bad",
@@ -447,6 +448,7 @@ class BatchModeTest(unittest.TestCase):
                     continue_on_error=True,
                     summary_output_file=str(summary_path),
                     carton_factor_file="./data/carton.xlsx",
+                    brand_keywords=["品牌A"],
                     systems=[
                         {
                             "display_name": "停用系统",
@@ -481,6 +483,7 @@ class BatchModeTest(unittest.TestCase):
                     continue_on_error=False,
                     summary_output_file=str(summary_path),
                     carton_factor_file="./data/carton.xlsx",
+                    brand_keywords=["品牌A"],
                     systems=[
                         {
                             "system_id": "bad",
@@ -519,6 +522,52 @@ class BatchModeTest(unittest.TestCase):
             self.assertIn("loaded_sales_files", summary.columns)
             self.assertIn("missing_sales_files", summary.columns)
             self.assertIn("inventory_file_exists", summary.columns)
+
+    def test_run_batch_summary_preserves_input_files_count_from_report_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_path = Path(tmp) / "batch_run_summary.xlsx"
+            cfg = core_config.validate_config(
+                build_batch_config(
+                    continue_on_error=True,
+                    summary_output_file=str(summary_path),
+                    carton_factor_file="./data/carton.xlsx",
+                    brand_keywords=["品牌A"],
+                    systems=[
+                        {
+                            "system_id": "ok",
+                            "display_name": "好系统",
+                            "enabled": True,
+                            "data_subdir": "好系统",
+                            "sales_files": ["a.xlsx", "b.xlsx"],
+                            "inventory_file": "inv.xlsx",
+                            "output_file": "./reports/a.xlsx",
+                        },
+                    ],
+                )
+            )
+
+            with patch(
+                "scripts.generate_inventory_risk_report.generate_report_for_system",
+                return_value={
+                    "system_id": "ok",
+                    "display_name": "好系统",
+                    "status": "SUCCESS",
+                    "message": "",
+                    "error_stage": "",
+                    "output_file": "./reports/a.xlsx",
+                    "input_files_count": 4,
+                    "loaded_sales_files": 2,
+                    "missing_sales_files": 1,
+                    "inventory_file_exists": True,
+                    "detail_rows": 10,
+                    "missing_sku_rows": 1,
+                },
+            ):
+                failures = run_batch(cfg)
+
+            self.assertEqual(failures, 0)
+            summary = pd.read_excel(summary_path)
+            self.assertEqual(int(summary.iloc[0]["input_files_count"]), 4)
 
 
 if __name__ == "__main__":

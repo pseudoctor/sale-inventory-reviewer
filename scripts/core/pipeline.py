@@ -355,7 +355,7 @@ def generate_report_for_system(
         "message": "",
         "error_stage": "",
         "output_file": str(ctx.output_file),
-        "input_files_count": int(inputs.loaded_sales_file_count + 1),
+        "input_files_count": int(inputs.loaded_sales_file_count + len(inputs.missing_sales_files) + 1),
         "loaded_sales_files": int(inputs.loaded_sales_file_count),
         "missing_sales_files": int(len(inputs.missing_sales_files)),
         "inventory_file_exists": bool(ctx.inventory_file_exists),
