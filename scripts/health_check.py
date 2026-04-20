@@ -85,6 +85,11 @@ def _resolve_config_path(path_value: object) -> Path | None:
     return path
 
 
+def _resolve_effective_raw_data_dir(config: dict) -> Path:
+    """解析与实际运行一致的 raw_data 目录，单模式也要考虑 data_subdir。"""
+    return core_config.resolve_system_raw_data_dir(config, BASE_DIR)
+
+
 def _check_sales_amount_columns(sales_files: list[Path]) -> list[str]:
     """校验销售文件是否包含门店销量排名调货汇总所需的销售额列。"""
     errors: list[str] = []
@@ -122,14 +127,10 @@ def _check_config_and_paths() -> list[str]:
     except Exception as exc:  # noqa: BLE001
         errors.append(f"reports directory is not writable: {exc}")
 
-    raw_data_dir = Path(config["raw_data_dir"])
-    if not raw_data_dir.is_absolute():
-        raw_data_dir = (BASE_DIR / raw_data_dir).resolve()
-    if not raw_data_dir.exists():
-        errors.append(f"raw_data_dir not found: {raw_data_dir}")
-        return errors
-    if not raw_data_dir.is_dir():
-        errors.append(f"raw_data_dir is not a directory: {raw_data_dir}")
+    try:
+        raw_data_dir = _resolve_effective_raw_data_dir(config)
+    except Exception as exc:  # noqa: BLE001
+        errors.append(str(exc))
         return errors
 
     if _needs_xls_support(config, raw_data_dir):

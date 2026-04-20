@@ -83,6 +83,9 @@ def validate_config(config: AppConfig) -> AppConfig:
 
     if not isinstance(config.get("raw_data_dir"), str) or not str(config["raw_data_dir"]).strip():
         raise ValueError("config.raw_data_dir must be a non-empty string.")
+    data_subdir = config.get("data_subdir", "")
+    if data_subdir is not None and not isinstance(data_subdir, str):
+        raise ValueError("config.data_subdir must be a string.")
     display_name = config.get("display_name", "")
     if display_name is not None and not isinstance(display_name, str):
         raise ValueError("config.display_name must be a string.")
@@ -221,6 +224,10 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
         if display_name in seen_display_names:
             raise ValueError(f"Duplicated display_name in batch.systems: {display_name}")
         seen_display_names.add(display_name)
+
+        data_subdir = typed_system.get("data_subdir", "")
+        if data_subdir is not None and not isinstance(data_subdir, str):
+            raise ValueError(f"batch.systems[{idx}].data_subdir must be a string.")
 
         system_id = str(typed_system.get("system_id", "")).strip() or display_name
         if system_id in seen_ids:
