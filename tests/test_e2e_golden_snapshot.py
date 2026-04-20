@@ -466,8 +466,83 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     detail = pd.read_excel(output_file, sheet_name="明细", header=1)
     detail["门店名称"] = detail["门店名称"].ffill()
     row = detail.iloc[0]
-    assert str(row["商品条码"]) == "817620"
+    assert pd.isna(row["商品条码"])
     assert row["省份"] == "其他/未知"
+
+
+def test_detail_barcode_backfills_from_sales_by_product_code(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌B"],
+                "商品名称": ["回填条码SKU"],
+                "商品编码": ["817620"],
+                "商品条码": ["6901234567890"],
+                "销售数量": [10],
+                "销售时间": ["2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌B"],
+                "商品名称": ["回填条码SKU"],
+                "商品编码": ["817620"],
+                "库存数量": [5],
+                "库存日期": ["2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6901234567890"],
+                "商品名称": ["回填条码SKU"],
+                "装箱数（因子）": [6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "brand_keywords": ["品牌B"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    generate_report_for_system(config, config)
+    detail = pd.read_excel(output_file, sheet_name="明细", header=1)
+    detail["门店名称"] = detail["门店名称"].ffill()
+    row = detail.iloc[0]
+    assert str(row["商品条码"]) == "6901234567890"
 
 
 def test_zero_sales_stagnant_inventory_generates_outbound_qty(tmp_path: Path):

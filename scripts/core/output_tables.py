@@ -195,11 +195,6 @@ def _build_missing_and_action_frames(
             "daily_sales_30d": "近30天平均日销售",
         }
     )
-    missing_sku_out["商品条码"] = (
-        missing_sku_out["商品条码"].where(missing_sku_out["商品条码"].notna(), missing_sku_out["barcode"])
-        if is_wumei_system
-        else missing_sku_out["barcode"]
-    )
     missing_sku_out = missing_sku_out.drop(columns=["barcode"])
     missing_sku_out["商品条码"] = missing_sku_out["商品条码"].apply(lambda x: core_io.normalize_barcode_value(x) or "")
 

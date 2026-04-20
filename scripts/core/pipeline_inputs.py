@@ -109,7 +109,12 @@ def load_sales_data(
             df["product_code"] = df["barcode"]
         else:
             df["product_code"] = None
-        df["display_barcode"] = df["national_barcode"].where(df["national_barcode"].notna(), df["barcode"])
+        df["actual_barcode"] = (
+            df["national_barcode"].where(df["national_barcode"].notna(), df["barcode"])
+            if barcode_col != "商品编码"
+            else df["national_barcode"]
+        )
+        df["display_barcode"] = df["actual_barcode"]
         if "supplier_card" not in df.columns:
             df["supplier_card"] = None
         df["supplier_card"] = df["supplier_card"].apply(core_io.normalize_supplier_card_value)
@@ -238,6 +243,7 @@ def prepare_inventory_data(
         inv_df["product_code"] = inv_df["barcode"]
     else:
         inv_df["product_code"] = None
+    inv_df["actual_barcode"] = inv_df["barcode"] if inv_barcode != "商品编码" else None
     if "supplier_card" not in inv_df.columns:
         inv_df["supplier_card"] = None
     inv_df["supplier_card"] = inv_df["supplier_card"].apply(core_io.normalize_supplier_card_value)
