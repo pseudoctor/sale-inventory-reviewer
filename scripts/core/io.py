@@ -1,30 +1,24 @@
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
 import importlib.util
 from pathlib import Path
-import re
 from typing import List, Optional, Tuple
 
 import pandas as pd
 
-
-def extract_month_key(filename: str) -> Optional[int]:
-    match = re.search(r"(\d{4})(\d{2})", filename)
-    if not match:
-        return None
-    year = int(match.group(1))
-    month = int(match.group(2))
-    if month < 1 or month > 12:
-        return None
-    return year * 100 + month
-
-
-def find_column(columns: List[str], candidates: List[str]) -> Optional[str]:
-    for c in candidates:
-        if c in columns:
-            return c
-    return None
+from .column_detection import extract_month_key as extract_month_key
+from .column_detection import find_column as find_column
+from .column_detection import find_sales_amount_column as find_sales_amount_column
+from .column_detection import format_ignored_sales_files as format_ignored_sales_files
+from .column_detection import list_ignored_sales_files as list_ignored_sales_files
+from .column_detection import resolve_sales_candidates as resolve_sales_candidates
+from .normalization import (
+    normalize_barcode_value as normalize_barcode_value,
+    normalize_numeric_series as normalize_numeric_series,
+    normalize_numeric_value as normalize_numeric_value,
+    normalize_supplier_card_value as normalize_supplier_card_value,
+    pick_first_non_empty as pick_first_non_empty,
+)
 
 
 def read_excel_first_sheet(path: Path) -> pd.DataFrame:
@@ -33,136 +27,6 @@ def read_excel_first_sheet(path: Path) -> pd.DataFrame:
             f"Reading .xls requires 'xlrd'. Install with: python3 -m pip install xlrd (file: {path})"
         )
     return pd.read_excel(path, sheet_name=0, dtype=str)
-
-
-def resolve_sales_candidates(raw_data_dir: Path, configured_sales_files: List[str]) -> List[Path]:
-    if not raw_data_dir.exists() or not raw_data_dir.is_dir():
-        raise FileNotFoundError(f"Sales data directory not found: {raw_data_dir}")
-    if configured_sales_files:
-        base_dir = raw_data_dir.resolve()
-        resolved_paths: List[Path] = []
-        for name in configured_sales_files:
-            candidate = (base_dir / name).resolve()
-            try:
-                candidate.relative_to(base_dir)
-            except ValueError as exc:
-                raise ValueError(
-                    f"Configured sales file escapes raw_data_dir: {name} (raw_data_dir={raw_data_dir})"
-                ) from exc
-            resolved_paths.append(candidate)
-        return resolved_paths
-
-    candidates: List[Tuple[int, Path]] = []
-    for path in raw_data_dir.iterdir():
-        if not path.is_file() or path.suffix.lower() not in {".xlsx", ".xls"}:
-            continue
-        name = path.name.lower()
-        if "库存" in name or "inventory" in name:
-            continue
-        if "销售" not in name and "sale" not in name and "sales" not in name:
-            continue
-        month_key = extract_month_key(path.name)
-        if month_key is None:
-            continue
-        candidates.append((month_key, path))
-    candidates.sort(key=lambda x: x[0])
-    return [path for _, path in candidates]
-
-
-def list_ignored_sales_files(raw_data_dir: Path, configured_sales_files: List[str]) -> List[str]:
-    if configured_sales_files or not raw_data_dir.exists() or not raw_data_dir.is_dir():
-        return []
-    ignored: List[str] = []
-    for path in raw_data_dir.iterdir():
-        if not path.is_file() or path.suffix.lower() not in {".xlsx", ".xls"}:
-            continue
-        name = path.name.lower()
-        if "库存" in name or "inventory" in name:
-            ignored.append(f"{path.name} (inventory-like)")
-            continue
-        if "销售" not in name and "sale" not in name and "sales" not in name:
-            ignored.append(f"{path.name} (missing sales keyword)")
-            continue
-        if extract_month_key(path.name) is None:
-            ignored.append(f"{path.name} (missing YYYYMM)")
-    return ignored
-
-
-def format_ignored_sales_files(ignored_sales_files: List[str], limit: int = 20, max_chars: int = 2000) -> str:
-    if not ignored_sales_files:
-        return ""
-    shown = ignored_sales_files[:limit]
-    text = " | ".join(shown)
-    hidden = len(ignored_sales_files) - len(shown)
-    if len(text) > max_chars:
-        text = text[: max_chars - 3] + "..."
-    if hidden > 0:
-        text = f"{text} | ... (+{hidden} more)"
-    return text
-
-
-def normalize_barcode_value(value) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, float):
-        if pd.isna(value):
-            return None
-        return format(value, ".0f")
-    if isinstance(value, int):
-        return str(value)
-    text = str(value).strip()
-    if text == "" or text.lower() in {"nan", "none"}:
-        return None
-    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?[eE][+-]?\d+", text):
-        try:
-            text = format(Decimal(text), "f")
-        except (InvalidOperation, ValueError):
-            return text
-    if re.fullmatch(r"\d+\.0+", text):
-        return text.split(".", 1)[0]
-    if re.fullmatch(r"\d+\.\d+", text):
-        integer, decimal = text.split(".", 1)
-        if set(decimal) == {"0"}:
-            return integer
-    return text
-
-
-def normalize_supplier_card_value(value) -> Optional[str]:
-    return normalize_barcode_value(value)
-
-
-def normalize_numeric_value(value) -> Optional[float]:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        if pd.isna(value):
-            return None
-        return float(value)
-    text = str(value).strip()
-    if text == "" or text.lower() in {"nan", "none"}:
-        return None
-    cleaned = text.replace(",", "").replace("，", "")
-    numeric = pd.to_numeric(pd.Series([cleaned]), errors="coerce").iloc[0]
-    if pd.isna(numeric):
-        return None
-    return float(numeric)
-
-
-def normalize_numeric_series(values: pd.Series) -> tuple[pd.Series, int]:
-    raw_text = values.astype(str).str.strip()
-    raw_non_empty = values.notna() & ~raw_text.str.lower().isin({"", "nan", "none"})
-    cleaned = raw_text.str.replace(",", "", regex=False).str.replace("，", "", regex=False)
-    normalized = pd.to_numeric(cleaned, errors="coerce")
-    invalid_rows = int((raw_non_empty & normalized.isna()).sum())
-    return normalized.fillna(0), invalid_rows
-
-
-def pick_first_non_empty(series: pd.Series) -> Optional[str]:
-    for value in series:
-        normalized = normalize_supplier_card_value(value)
-        if normalized is not None:
-            return normalized
-    return None
 
 
 def build_unambiguous_barcode_map(df: pd.DataFrame, group_cols: List[str], value_col: str, output_col: str) -> pd.DataFrame:
@@ -232,21 +96,6 @@ def normalize_sales_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[st
     df[qty_col] = qty_series
     df.attrs["invalid_qty_rows"] = invalid_qty_rows
     return df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col
-
-
-def find_sales_amount_column(columns: List[str]) -> Optional[str]:
-    """识别销售额字段，兼容不同系统导出的常见列名。"""
-    return find_column(
-        columns,
-        [
-            "销售金额",
-            "含税销售金额/元",
-            "含税销售额/元",
-            "销售额",
-            "sales_amount",
-            "amount",
-        ],
-    )
 
 
 def normalize_inventory_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, str, Optional[str], str, str, str, Optional[str]]:
