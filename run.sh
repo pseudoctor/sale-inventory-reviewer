@@ -22,13 +22,6 @@ else
   source venv/bin/activate
 fi
 
-HAS_XLS_SUPPORT="$(python3 scripts/check_xls_support_needed.py)"
-
-RUNTIME_IMPORTS="import pandas, openpyxl, yaml"
-if [ "$HAS_XLS_SUPPORT" = "yes" ]; then
-  RUNTIME_IMPORTS="import pandas, openpyxl, yaml, xlrd"
-fi
-
 # Ensure core runtime deps exist even for old pre-created venv.
 if ! python3 -c "import pandas, openpyxl, yaml" >/dev/null 2>&1; then
   REQ_FILE="requirements.txt"
@@ -38,6 +31,8 @@ if ! python3 -c "import pandas, openpyxl, yaml" >/dev/null 2>&1; then
   echo "Installing missing dependencies from ${REQ_FILE} ..."
   python3 -m pip install -r "$REQ_FILE"
 fi
+
+HAS_XLS_SUPPORT="$(python3 scripts/check_xls_support_needed.py)"
 
 if [ "$HAS_XLS_SUPPORT" = "yes" ] && ! python3 -c "import xlrd" >/dev/null 2>&1; then
   REQ_FILE="requirements.txt"
