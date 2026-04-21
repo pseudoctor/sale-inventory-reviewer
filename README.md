@@ -73,9 +73,30 @@ and applies header styling, filters, borders, risk color highlights, and out-of-
 run.bat
 ```
 
-Install pinned dependencies manually if needed:
+## Development Setup
+The canonical local development environment is Python `3.11` with `venv` and `requirements.lock`.
+
+Bootstrap or refresh dependencies:
 ```bash
-python3 -m pip install -r requirements.lock
+make bootstrap
+make sync
+```
+
+If `make` is unavailable, run the equivalent commands directly:
+```bash
+python3 -m venv venv
+./venv/bin/python -m pip install --upgrade pip
+./venv/bin/python -m pip install -r requirements.lock
+```
+
+Standard developer commands:
+```bash
+make doctor  # preflight config, dependency, and input checks
+make lint    # ruff check
+make compile # Python syntax/import compile check
+make test    # pytest regression suite
+make check   # doctor + lint + compile + tests
+make run     # same as ./run.sh
 ```
 
 `run_mode` is controlled in `config.yaml`:
@@ -99,7 +120,7 @@ python3 -m pip install -r requirements.lock
 ## Health Check
 - Run preflight manually:
 ```bash
-python3 scripts/health_check.py
+./venv/bin/python scripts/health_check.py
 ```
 - `run.sh` / `run.bat` also execute health check automatically before report generation.
 
@@ -175,13 +196,14 @@ venv\Scripts\python scripts\health_check.py
 ## Testing
 - Full regression:
 ```bash
-python3 -m pytest -q
+./venv/bin/python -m pytest -q
 ```
 - Golden snapshot E2E (stable output contract for key sheets):
 ```bash
-python3 -m pytest -q tests/test_e2e_golden_snapshot.py
+./venv/bin/python -m pytest -q tests/test_e2e_golden_snapshot.py
 ```
 - CI is provided via GitHub Actions: `.github/workflows/ci.yml` (runs lockfile install + ruff + py_compile + pytest).
+- Tool configuration lives in `pyproject.toml`; dependency locking remains in `requirements.lock`.
 
 ## Risk Logic
 - `近三月+本月迄今平均日销` = 窗口销量总和 / 窗口有效天数
