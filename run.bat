@@ -31,26 +31,8 @@ if not exist "venv\" (
   call venv\Scripts\activate.bat
 )
 
-for /f %%i in ('python -c "from pathlib import Path; import sys; sys.path.insert(0, str(Path('.').resolve())); from scripts.core import config as core_config; config_path = Path('config.yaml'); needs_xls = False
-if config_path.exists():
-    try:
-        config = core_config.load_config(config_path)
-        def is_xls_file(name):
-            return isinstance(name, str) and name.strip().lower().endswith('.xls')
-        if is_xls_file(config.get('inventory_file')) or is_xls_file(config.get('carton_factor_file')):
-            needs_xls = True
-        if any(is_xls_file(name) for name in config.get('sales_files', [])):
-            needs_xls = True
-        if str(config.get('run_mode', 'single')).lower() == 'batch':
-            for system in config.get('batch', {}).get('systems', []):
-                if not bool(system.get('enabled', True)):
-                    continue
-                if is_xls_file(system.get('inventory_file')) or is_xls_file(system.get('carton_factor_file')) or any(is_xls_file(name) for name in system.get('sales_files', [])):
-                    needs_xls = True
-                    break
-    except Exception:
-        pass
-print('yes' if needs_xls else 'no')"') do set "HAS_XLS_SUPPORT=%%i"
+set "HAS_XLS_SUPPORT=no"
+for /f %%i in ('python -c "from pathlib import Path; import sys; sys.path.insert(0, str(Path('.').resolve())); config_path = Path('config.yaml'); is_xls = lambda name: isinstance(name, str) and name.strip().lower().endswith('.xls'); core_config = __import__('scripts.core.config', fromlist=['config']); cfg = core_config.load_config(config_path) if config_path.exists() else None; needs_xls = bool(cfg) and (is_xls(cfg.get('inventory_file')) or is_xls(cfg.get('carton_factor_file')) or any(is_xls(name) for name in cfg.get('sales_files', [])) or (str(cfg.get('run_mode', 'single')).lower() == 'batch' and any(bool(system.get('enabled', True)) and (is_xls(system.get('inventory_file')) or is_xls(system.get('carton_factor_file')) or any(is_xls(name) for name in system.get('sales_files', []))) for system in cfg.get('batch', {}).get('systems', [])))); print('yes' if needs_xls else 'no')" 2^>nul') do set "HAS_XLS_SUPPORT=%%i"
 
 python -c "import pandas, openpyxl, yaml" >nul 2>&1
 if errorlevel 1 (

@@ -238,6 +238,9 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
         if not enabled:
             continue
 
+        if not isinstance(data_subdir, str) or not data_subdir.strip():
+            raise ValueError(f"batch.systems[{idx}].data_subdir must be a non-empty string for enabled systems.")
+
         sales_files = typed_system.get("sales_files")
         if not isinstance(sales_files, list) or not sales_files:
             raise ValueError(f"batch.systems[{idx}].sales_files must be a non-empty list.")
