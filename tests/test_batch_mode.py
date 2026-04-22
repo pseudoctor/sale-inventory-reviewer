@@ -354,14 +354,20 @@ class BatchModeTest(unittest.TestCase):
         self.assertTrue(merged["province_column_enabled"])
 
     def test_resolve_system_raw_data_dir_with_subdir(self):
-        cfg = {"raw_data_dir": "./raw_data", "data_subdir": "宁夏物美"}
-        path = core_config.resolve_system_raw_data_dir(cfg, Path.cwd())
-        self.assertTrue(str(path).endswith("raw_data/宁夏物美"))
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "raw_data" / "宁夏物美").mkdir(parents=True)
+            cfg = {"raw_data_dir": "./raw_data", "data_subdir": "宁夏物美"}
+            path = core_config.resolve_system_raw_data_dir(cfg, base_dir)
+            self.assertEqual(path, (base_dir / "raw_data" / "宁夏物美").resolve())
 
     def test_resolve_system_raw_data_dir_raises_for_missing_subdir(self):
-        cfg = {"raw_data_dir": "./raw_data", "data_subdir": "不存在的系统目录"}
-        with self.assertRaises(FileNotFoundError):
-            core_config.resolve_system_raw_data_dir(cfg, Path.cwd())
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            (base_dir / "raw_data").mkdir()
+            cfg = {"raw_data_dir": "./raw_data", "data_subdir": "不存在的系统目录"}
+            with self.assertRaises(FileNotFoundError):
+                core_config.resolve_system_raw_data_dir(cfg, base_dir)
 
     def test_resolve_output_file_path_respects_explicit_output(self):
         cfg = {"output_file": "./reports/陕西华润_inventory_risk_report.xlsx"}
