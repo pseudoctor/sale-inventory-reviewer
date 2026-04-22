@@ -205,6 +205,28 @@ venv\Scripts\python scripts\health_check.py
 - CI is provided via GitHub Actions: `.github/workflows/ci.yml` (runs lockfile install + ruff + py_compile + pytest).
 - Tool configuration lives in `pyproject.toml`; dependency locking remains in `requirements.lock`.
 
+## Acceptance Summary
+The checks below were executed locally on April 21, 2026 against the current workspace and bundled sample data:
+- Automated checks passed: `113` pytest cases, `ruff check`, `py_compile`, and `scripts/health_check.py`.
+- End-to-end batch run passed for `宁夏物美`, `陕西华润`, and `甘宁华润`; all systems completed with `SUCCESS` in `reports/batch_run_summary.xlsx`.
+- Generated workbooks and required sheets were verified to exist, including `门店销量排名调货汇总`.
+- Manual sample recomputation against raw sales and inventory files passed for detail rows across all three systems, covering:
+  - inventory quantity
+  - `近三月+本月迄今平均日销`
+  - `近30天平均日销售`
+  - `库存周转天数`
+  - risk level
+  - replenish / outbound suggestions
+- Manual sample recomputation also passed for `门店销量排名调货汇总`, covering:
+  - dense ranking by store sales amount
+  - store sales amount
+  - item sales amount
+  - fallback unit price when the current store had no item sales in the ranking window
+  - inventory amount
+  - full-inventory outbound override when `近三月+本月迄今平均日销 = 0`
+
+This is strong regression evidence for the current version, but not a formal proof that no edge-case defects remain in unseen production data.
+
 ## Risk Logic
 - `近三月+本月迄今平均日销` = 窗口销量总和 / 窗口有效天数
   - 窗口默认：近三个月完整自然月 + 本月迄今
