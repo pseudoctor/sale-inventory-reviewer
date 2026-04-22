@@ -25,7 +25,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Static compile check
-        run: python -m py_compile scripts/generate_inventory_risk_report.py scripts/core/*.py
+        run: python -m compileall -q scripts
 
       - name: Run tests
         run: python -m pytest -q
@@ -50,7 +50,7 @@ jobs:
         run: python -m ruff check .
 
       - name: Static compile check
-        run: python -m py_compile scripts/generate_inventory_risk_report.py scripts/core/*.py
+        run: python -m compileall -q scripts
 
       - name: Run tests
         run: python -m pytest -q
