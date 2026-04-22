@@ -372,17 +372,17 @@ class BatchModeTest(unittest.TestCase):
     def test_resolve_output_file_path_respects_explicit_output(self):
         cfg = {"output_file": "./reports/陕西华润_inventory_risk_report.xlsx"}
         out = core_config.resolve_output_file_path(cfg, "陕西华润", "2026-02-08", Path.cwd())
-        self.assertTrue(str(out).endswith("reports/陕西华润_inventory_risk_report.xlsx"))
+        self.assertEqual(out, (Path.cwd() / "reports" / "陕西华润_inventory_risk_report.xlsx").resolve())
 
     def test_resolve_output_file_path_uses_auto_name_when_legacy_default(self):
         cfg = {"output_file": "./reports/inventory_risk_report.xlsx"}
         out = core_config.resolve_output_file_path(cfg, "陕西华润", "2026-02-08", Path.cwd())
-        self.assertTrue(str(out).endswith("reports/陕西华润20260208库存预警.xlsx"))
+        self.assertEqual(out, (Path.cwd() / "reports" / "陕西华润20260208库存预警.xlsx").resolve())
 
     def test_resolve_expected_output_for_status_auto_name_has_placeholder(self):
         cfg = {"output_file": "./reports/inventory_risk_report.xlsx"}
         out = core_config.resolve_expected_output_for_status(cfg, "陕西华润", Path.cwd())
-        self.assertTrue(out.endswith("reports/陕西华润{库存日期}库存预警.xlsx"))
+        self.assertEqual(Path(out), (Path.cwd() / "reports" / "陕西华润{库存日期}库存预警.xlsx").resolve())
 
     def test_run_batch_continue_on_error_true(self):
         with tempfile.TemporaryDirectory() as tmp:
