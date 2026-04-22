@@ -13,6 +13,11 @@ class HealthCheckTest(unittest.TestCase):
         errors = health_check._check_python()
         self.assertIsInstance(errors, list)
 
+    def test_check_python_rejects_unsupported_runtime(self):
+        with patch.object(health_check.sys, "version_info", (3, 10, 12)):
+            errors = health_check._check_python()
+        self.assertTrue(any("Python >= 3.11 required" in err for err in errors))
+
     def test_check_dependencies_reports_missing_package(self):
         def fake_import(name):
             if name == "openpyxl":

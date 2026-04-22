@@ -4,8 +4,13 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 set "PY_CMD="
-py -3 --version >nul 2>&1
-if not errorlevel 1 set "PY_CMD=py -3"
+py -3.11 --version >nul 2>&1
+if not errorlevel 1 set "PY_CMD=py -3.11"
+
+if not defined PY_CMD (
+  py -3 --version >nul 2>&1
+  if not errorlevel 1 set "PY_CMD=py -3"
+)
 
 if not defined PY_CMD (
   python --version >nul 2>&1
@@ -13,7 +18,7 @@ if not defined PY_CMD (
 )
 
 if not defined PY_CMD (
-  echo Error: Python 3 is not installed or not in PATH
+  echo Error: Python 3.11 is not installed or not in PATH
   if /I not "%CI%"=="true" (
     if /I not "%NO_PAUSE%"=="1" pause
   )
@@ -29,6 +34,15 @@ if not exist "venv\" (
   python -m pip install -r !REQ_FILE!
 ) else (
   call venv\Scripts\activate.bat
+)
+
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
+if errorlevel 1 (
+  echo Error: the virtual environment is not using Python 3.11+
+  if /I not "%CI%"=="true" (
+    if /I not "%NO_PAUSE%"=="1" pause
+  )
+  exit /b 1
 )
 
 python -c "import pandas, openpyxl, yaml, xlrd" >nul 2>&1
