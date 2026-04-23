@@ -286,6 +286,48 @@ class HealthCheckTest(unittest.TestCase):
                 errors = health_check._check_config_and_paths()
             self.assertTrue(any("sales amount column" in err for err in errors))
 
+    def test_check_config_and_paths_single_mode_uses_data_subdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "raw_data"
+            reports = root / "reports"
+            data_dir = root / "data"
+            system_raw = raw / "陕西华润"
+            system_raw.mkdir(parents=True)
+            reports.mkdir()
+            data_dir.mkdir()
+            pd.DataFrame({"门店名称": ["A店"], "商品名称": ["SKU1"], "商品条码": ["1"], "库存数量": [1]}).to_excel(system_raw / "库存.xlsx", index=False)
+            pd.DataFrame(
+                {"门店名称": ["A店"], "商品名称": ["SKU1"], "商品条码": ["1"], "销售数量": [1], "销售时间": ["2026-02-01"]}
+            ).to_excel(system_raw / "销售202602.xlsx", index=False)
+            pd.DataFrame({"商品条码": ["1"], "商品名称": ["SKU1"], "装箱数（因子）": [6]}).to_excel(data_dir / "sku装箱数.xlsx", index=False)
+
+            cfg = {
+                "run_mode": "single",
+                "raw_data_dir": str(raw),
+                "data_subdir": "陕西华润",
+                "inventory_file": "库存.xlsx",
+                "sales_files": ["销售202602.xlsx"],
+                "output_file": "",
+                "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+                "risk_days_high": 60,
+                "risk_days_low": 45,
+                "sales_window_full_months": 3,
+                "sales_window_include_mtd": True,
+                "sales_window_recent_days": 30,
+                "season_mode": False,
+                "brand_keywords": ["测试"],
+                "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
+            }
+
+            with (
+                patch("scripts.health_check.BASE_DIR", root),
+                patch("scripts.health_check.CONFIG_PATH", root / "config.yaml"),
+                patch("scripts.health_check.core_config.load_config", return_value=cfg),
+            ):
+                errors = health_check._check_config_and_paths()
+            self.assertEqual(errors, [])
+
     def test_check_config_and_paths_reports_missing_carton_factor_in_batch_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,79 +1,13 @@
-import json
 from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
 
+from scripts.core import output_tables as core_output_tables
 from scripts.generate_inventory_risk_report import generate_report_for_system
-
-
-SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
-
-
-def _normalize_records(df: pd.DataFrame, cols: list[str]) -> list[dict]:
-    out = []
-    for row in df[cols].to_dict(orient="records"):
-        normalized = {}
-        for key, value in row.items():
-            if pd.isna(value):
-                normalized[key] = None
-            elif isinstance(value, float):
-                normalized[key] = round(value, 3)
-            else:
-                normalized[key] = value
-        out.append(normalized)
-    return out
-
-
-def _write_excel(df: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_excel(path, index=False)
-
-
-def _read_overview_group(output_file: Path, group_name: str) -> pd.DataFrame:
-    overview = pd.read_excel(output_file, sheet_name="运行总览", header=1)
-    return overview.loc[overview["分组"] == group_name].copy()
-
-
-def _capture_report(output_file: Path, expected_snapshot_name: str) -> None:
-    usage_guide = pd.read_excel(output_file, sheet_name="使用说明", header=1)
-    detail = pd.read_excel(output_file, sheet_name="明细", header=1)
-    detail["门店名称"] = detail["门店名称"].ffill()
-    catalog = pd.read_excel(output_file, sheet_name="商品编码对照清单", header=1)
-    replenish = pd.read_excel(output_file, sheet_name="建议补货清单", header=1)
-    transfer = pd.read_excel(output_file, sheet_name="建议调货清单", header=1)
-    summary = _read_overview_group(output_file, "核心指标")
-
-    actual = {
-        "sheet_names": pd.ExcelFile(output_file).sheet_names,
-        "usage_guide": _normalize_records(
-            usage_guide,
-            ["模块", "说明", "使用建议"],
-        ),
-        "detail": _normalize_records(
-            detail,
-            ["门店名称", "商品名称", "商品条码", "近三月+本月迄今平均日销", "库存数量", "风险等级", "建议调出数量", "建议补货数量"],
-        ),
-        "catalog": _normalize_records(
-            catalog,
-            ["商品编码", "品牌", "标准商品名", "销售表商品名", "库存商品名", "来源状态"],
-        ),
-        "replenish": _normalize_records(
-            replenish,
-            [c for c in ["门店名称", "商品名称", "省份", "装箱数（因子）", "建议补货数量", "建议补货箱数"] if c in replenish.columns],
-        ),
-        "transfer": _normalize_records(
-            transfer,
-            [c for c in ["门店名称", "商品名称", "省份", "装箱数（因子）", "建议调出数量"] if c in transfer.columns],
-        ),
-        "summary": {k: float(v) for k, v in zip(summary["指标"], summary["数值"])},
-    }
-
-    expected_path = SNAPSHOT_DIR / expected_snapshot_name
-    with expected_path.open("r", encoding="utf-8") as f:
-        expected = json.load(f)
-
-    assert actual == expected
+from tests.report_snapshot_helpers import capture_report as _capture_report
+from tests.report_snapshot_helpers import read_overview_group as _read_overview_group
+from tests.report_snapshot_helpers import write_excel as _write_excel
 
 
 def test_golden_snapshot_shaanxi_baseline(tmp_path: Path):
@@ -468,6 +402,123 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     row = detail.iloc[0]
     assert str(row["商品条码"]) == "817620"
     assert row["省份"] == "其他/未知"
+
+
+def test_detail_barcode_backfills_from_sales_by_product_code(tmp_path: Path):
+    raw_root = tmp_path / "raw_data"
+    system_dir = raw_root / "陕西华润"
+    data_dir = tmp_path / "data"
+    reports_dir = tmp_path / "reports"
+
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌B"],
+                "商品名称": ["回填条码SKU"],
+                "商品编码": ["817620"],
+                "商品条码": ["6901234567890"],
+                "销售数量": [10],
+                "销售时间": ["2026-02-08"],
+            }
+        ),
+        system_dir / "销售202602.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "门店名称": ["门店A"],
+                "品牌": ["品牌B"],
+                "商品名称": ["回填条码SKU"],
+                "商品编码": ["817620"],
+                "库存数量": [5],
+                "库存日期": ["2026-02-09"],
+            }
+        ),
+        system_dir / "库存.xlsx",
+    )
+    _write_excel(
+        pd.DataFrame(
+            {
+                "商品条码": ["6901234567890"],
+                "商品名称": ["回填条码SKU"],
+                "装箱数（因子）": [6],
+            }
+        ),
+        data_dir / "sku装箱数.xlsx",
+    )
+
+    output_file = reports_dir / "陕西华润20260209库存预警.xlsx"
+    config = {
+        "run_mode": "single",
+        "system_id": "shaanxi_huarun",
+        "display_name": "陕西华润",
+        "raw_data_dir": str(raw_root),
+        "data_subdir": "陕西华润",
+        "sales_files": ["销售202602.xlsx"],
+        "inventory_file": "库存.xlsx",
+        "output_file": str(output_file),
+        "carton_factor_file": str(data_dir / "sku装箱数.xlsx"),
+        "risk_days_high": 60,
+        "risk_days_low": 45,
+        "sales_window_full_months": 3,
+        "sales_window_include_mtd": True,
+        "sales_window_recent_days": 30,
+        "season_mode": False,
+        "strict_auto_scan": False,
+        "brand_keywords": ["品牌B"],
+        "sales_date_dayfirst": False,
+        "sales_date_format": "",
+        "fail_on_empty_window": False,
+    }
+
+    generate_report_for_system(config, config)
+    detail = pd.read_excel(output_file, sheet_name="明细", header=1)
+    detail["门店名称"] = detail["门店名称"].ffill()
+    row = detail.iloc[0]
+    assert str(row["商品条码"]) == "6901234567890"
+
+
+def test_missing_sku_name_fallback_only_applies_for_unique_candidate():
+    detail_out = pd.DataFrame(
+        {
+            "门店名称": ["门店A", "门店A"],
+            "品牌": ["品牌C", "品牌C"],
+            "商品条码": ["6900000000001", "6900000000002"],
+            "商品名称": ["同名SKU", "同名SKU"],
+            "省份": ["其他/未知", "其他/未知"],
+            "近三月+本月迄今平均日销": [1.0, 2.0],
+            "近30天平均日销售": [1.0, 2.0],
+            "库存数量": [0, 0],
+            "缺货": ["是", "是"],
+            "风险等级": ["高", "高"],
+            "建议调出数量": [0, 0],
+            "建议补货数量": [6, 9],
+        }
+    )
+    missing_sales = pd.DataFrame(
+        {
+            "store": ["门店A"],
+            "brand": ["品牌C"],
+            "display_barcode": [None],
+            "barcode": ["P3"],
+            "product": ["同名SKU"],
+            "province": ["其他/未知"],
+            "daily_sales_3m_mtd": [3.0],
+            "daily_sales_30d": [3.0],
+        }
+    )
+
+    missing_sku_out, *_ = core_output_tables._build_missing_and_action_frames(
+        detail_out=detail_out,
+        missing_sales=missing_sales,
+        is_wumei_system=False,
+        enable_province_column=False,
+    )
+
+    assert len(missing_sku_out) == 1
+    assert missing_sku_out["商品条码"].iloc[0] == ""
+    assert int(missing_sku_out["建议补货数量"].iloc[0]) == 0
 
 
 def test_zero_sales_stagnant_inventory_generates_outbound_qty(tmp_path: Path):

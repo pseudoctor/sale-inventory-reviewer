@@ -11,6 +11,7 @@ from . import matching as core_matching
 from . import output_tables as core_output_tables
 from . import pipeline_inputs as core_pipeline_inputs
 from . import pipeline_outputs as core_pipeline_outputs
+from . import pipeline_sheets as core_pipeline_sheets
 from . import pipeline_transfer as core_pipeline_transfer
 from . import report_writer as core_report_writer
 from . import system_rules as core_system_rules
@@ -306,15 +307,10 @@ def _build_output_stage(ctx: ReportRunContext, analysis: AnalysisStageResult) ->
 
 def _write_report_stage(ctx: ReportRunContext, outputs: OutputStageResult) -> None:
     """写报告阶段：组装最终工作表并落盘。"""
-    sheets = {
-        **{name: frame for name, frame in outputs.frames.items() if name not in {"使用说明", "商品编码对照清单"}},
-    }
-    if ctx.enable_ranked_store_transfer_summary:
-        sheets["门店销量排名调货汇总"] = outputs.store_sales_ranking_transfer_out
-    sheets["运行总览"] = outputs.executive_overview_out
-    sheets["使用说明"] = outputs.frames.usage_guide
-    sheets["商品编码对照清单"] = outputs.frames.product_code_catalog
-
+    sheets = core_pipeline_sheets.build_workbook_sheets(
+        outputs,
+        include_ranked_store_transfer_summary=ctx.enable_ranked_store_transfer_summary,
+    )
     try:
         core_report_writer.write_report_with_style(
             output_file=ctx.output_file,
@@ -355,7 +351,7 @@ def generate_report_for_system(
         "message": "",
         "error_stage": "",
         "output_file": str(ctx.output_file),
-        "input_files_count": int(inputs.loaded_sales_file_count + 1),
+        "input_files_count": int(inputs.loaded_sales_file_count + len(inputs.missing_sales_files) + 1),
         "loaded_sales_files": int(inputs.loaded_sales_file_count),
         "missing_sales_files": int(len(inputs.missing_sales_files)),
         "inventory_file_exists": bool(ctx.inventory_file_exists),

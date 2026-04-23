@@ -83,6 +83,9 @@ def validate_config(config: AppConfig) -> AppConfig:
 
     if not isinstance(config.get("raw_data_dir"), str) or not str(config["raw_data_dir"]).strip():
         raise ValueError("config.raw_data_dir must be a non-empty string.")
+    data_subdir = config.get("data_subdir", "")
+    if data_subdir is not None and not isinstance(data_subdir, str):
+        raise ValueError("config.data_subdir must be a string.")
     display_name = config.get("display_name", "")
     if display_name is not None and not isinstance(display_name, str):
         raise ValueError("config.display_name must be a string.")
@@ -167,6 +170,10 @@ def validate_config(config: AppConfig) -> AppConfig:
         raise ValueError("brand_keywords must be a list.")
     if not all(isinstance(x, str) for x in brand_keywords):
         raise ValueError("brand_keywords entries must be strings.")
+    normalized_brand_keywords = [str(x).strip() for x in brand_keywords if str(x).strip()]
+    if not normalized_brand_keywords:
+        raise ValueError("brand_keywords must contain at least one non-empty string.")
+    config["brand_keywords"] = normalized_brand_keywords
 
     province_column_enabled = config.get("province_column_enabled", None)
     if province_column_enabled is not None and not isinstance(province_column_enabled, bool):
@@ -218,6 +225,10 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
             raise ValueError(f"Duplicated display_name in batch.systems: {display_name}")
         seen_display_names.add(display_name)
 
+        data_subdir = typed_system.get("data_subdir", "")
+        if data_subdir is not None and not isinstance(data_subdir, str):
+            raise ValueError(f"batch.systems[{idx}].data_subdir must be a string.")
+
         system_id = str(typed_system.get("system_id", "")).strip() or display_name
         if system_id in seen_ids:
             raise ValueError(f"Duplicated identity in batch.systems: {system_id}")
@@ -226,6 +237,9 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
         # Disabled systems are intentionally skippable placeholders in batch mode.
         if not enabled:
             continue
+
+        if not isinstance(data_subdir, str) or not data_subdir.strip():
+            raise ValueError(f"batch.systems[{idx}].data_subdir must be a non-empty string for enabled systems.")
 
         sales_files = typed_system.get("sales_files")
         if not isinstance(sales_files, list) or not sales_files:

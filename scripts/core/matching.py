@@ -21,6 +21,13 @@ def _prepare_match_keys(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _optional_barcode_series(df: pd.DataFrame, column: str) -> pd.Series:
+    """返回可选条码列；缺失时补全为全空序列，兼容旧调用方测试数据。"""
+    if column in df.columns:
+        return df[column]
+    return pd.Series([None] * len(df), index=df.index)
+
+
 def _coalesce_store_column(df: pd.DataFrame) -> pd.DataFrame:
     """统一 merge 后的门店列名，避免 store_x/store_y 泄漏到下游。"""
     out = df.copy()
@@ -74,6 +81,16 @@ def _build_sales_key_mapping(sales_df: pd.DataFrame) -> pd.DataFrame:
     for col in ["record_rows", "name_conflict_count", "brand_conflict_count"]:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0).astype(int)
     return out
+
+
+def _build_sales_product_barcode_mapping(sales_df: pd.DataFrame) -> pd.DataFrame:
+    """按商品编码从销售表提取唯一商品条码，用于回填库存侧缺失条码。"""
+    return core_io.build_unambiguous_source_to_target_map(
+        sales_df,
+        source_col="product_key",
+        target_col="display_barcode",
+        output_col="sales_product_barcode",
+    )[0]
 
 
 def build_detail_with_matching(
@@ -134,6 +151,7 @@ def build_detail_with_matching(
     )
 
     sales_mapping = _build_sales_key_mapping(sales_df)
+    sales_product_barcode_mapping = _build_sales_product_barcode_mapping(sales_df)
     sales_supplier = (
         sales_df.groupby(["store_key", "product_key"])["supplier_card"]
         .agg(core_io.pick_first_non_empty)
@@ -163,9 +181,15 @@ def build_detail_with_matching(
         on=["store_key", "product_key"],
         how="left",
     )
+    sales_totals = sales_totals.merge(
+        sales_product_barcode_mapping,
+        on=["product_key"],
+        how="left",
+    )
     sales_totals = sales_totals.merge(sales_supplier, on=["store_key", "product_key"], how="left")
 
     inv_df = _prepare_match_keys(inv_df)
+    inv_df["actual_barcode"] = _optional_barcode_series(inv_df, "actual_barcode")
     inv_totals = (
         inv_df.groupby(["store_key", "product_key"], as_index=False)
         .agg(
@@ -174,6 +198,7 @@ def build_detail_with_matching(
             inventory_brand=("brand", core_io.pick_first_non_empty),
             inventory_product=("product", core_io.pick_first_non_empty),
             inventory_barcode=("barcode", core_io.pick_first_non_empty),
+            inventory_actual_barcode=("actual_barcode", core_io.pick_first_non_empty),
             inventory_supplier_card=("supplier_card", core_io.pick_first_non_empty),
         )
     )
@@ -190,6 +215,7 @@ def build_detail_with_matching(
                 "display_product_name",
                 "display_brand",
                 "display_barcode",
+                "sales_product_barcode",
                 "supplier_card",
                 "name_source_ts",
                 "brand_source_ts",
@@ -227,10 +253,17 @@ def build_detail_with_matching(
     )
     detail["province"] = detail["supplier_card"].apply(province_mapper)
     detail["barcode"] = detail["inventory_barcode"].where(detail["inventory_barcode"].notna(), detail["product_key"])
-    detail["barcode_output"] = (
-        detail["display_barcode"].where(detail["display_barcode"].notna(), detail["barcode"])
-        if is_wumei_system
-        else detail["barcode"]
+    detail["barcode_output"] = detail["display_barcode"].where(
+        detail["display_barcode"].notna(),
+        detail["sales_product_barcode"],
+    )
+    detail["barcode_output"] = detail["barcode_output"].where(
+        detail["barcode_output"].notna(),
+        detail["inventory_actual_barcode"],
+    )
+    detail["barcode_output"] = detail["barcode_output"].where(
+        detail["barcode_output"].notna(),
+        detail["barcode"],
     )
     detail = _coalesce_store_column(detail)
 
@@ -274,6 +307,14 @@ def build_detail_with_matching(
     missing_sales["brand_conflict_count"] = pd.to_numeric(missing_sales["brand_conflict_count"], errors="coerce").fillna(0).astype(int)
     missing_sales["province"] = missing_sales["supplier_card"].apply(province_mapper)
     missing_sales = _coalesce_store_column(missing_sales)
+    missing_sales["display_barcode"] = missing_sales["display_barcode"].where(
+        missing_sales["display_barcode"].notna(),
+        missing_sales["sales_product_barcode"],
+    )
+    missing_sales["display_barcode"] = missing_sales["display_barcode"].where(
+        missing_sales["display_barcode"].notna(),
+        missing_sales["barcode"],
+    )
 
     if not missing_sales.empty:
         missing_detail = missing_sales.copy()
@@ -283,11 +324,7 @@ def build_detail_with_matching(
         missing_detail["turnover_days"] = float("inf")
         missing_detail["risk_level"] = "高"
         missing_detail["province"] = missing_detail["supplier_card"].apply(province_mapper)
-        missing_detail["barcode_output"] = (
-            missing_detail["display_barcode"].where(missing_detail["display_barcode"].notna(), missing_detail["barcode"])
-            if is_wumei_system
-            else missing_detail["barcode"]
-        )
+        missing_detail["barcode_output"] = missing_detail["display_barcode"]
         missing_detail = missing_detail[[
             "store_key", "product_key", "store", "brand", "barcode", "barcode_output", "product", "daily_sales_3m_mtd", "daily_sales_30d",
             "forecast_daily_sales", "inventory_qty", "supplier_card", "province", "risk_level", "inventory_sales_ratio",

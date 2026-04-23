@@ -70,12 +70,14 @@ NORMALIZED_SALES_SCHEMA = FrameSchema(
         "supplier_card": "标准化后的供商卡号。",
         "sales_amount": "标准化后的销售金额。",
         "national_barcode": "标准化后的国条码，可选。",
+        "actual_barcode": "确认来自条码字段的真实条码，不回退商品编码。",
     },
 )
 
 NORMALIZED_INVENTORY_SCHEMA = FrameSchema(
     name="input.inventory.normalized",
     required_columns=core_frame_columns.NORMALIZED_INVENTORY_REQUIRED_COLUMNS,
+    optional_columns=core_frame_columns.NORMALIZED_INVENTORY_OPTIONAL_COLUMNS,
     allow_unknown_columns=False,
     description="库存标准化结果，供匹配、风险计算和输出表构建使用。",
     column_descriptions={
@@ -87,6 +89,7 @@ NORMALIZED_INVENTORY_SCHEMA = FrameSchema(
         "store_code": "标准化后的门店编码。",
         "product_code": "标准化后的商品编码。",
         "supplier_card": "标准化后的供商卡号。",
+        "actual_barcode": "确认来自条码字段的真实条码，不回退商品编码。",
     },
 )
 

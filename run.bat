@@ -45,12 +45,25 @@ if errorlevel 1 (
   exit /b 1
 )
 
-python -c "import pandas, openpyxl, yaml, xlrd" >nul 2>&1
+set "HAS_XLS_SUPPORT=no"
+for /f %%i in ('python scripts\check_xls_support_needed.py 2^>nul') do set "HAS_XLS_SUPPORT=%%i"
+
+python -c "import pandas, openpyxl, yaml" >nul 2>&1
 if errorlevel 1 (
   set "REQ_FILE=requirements.txt"
   if exist "requirements.lock" set "REQ_FILE=requirements.lock"
   echo Installing missing dependencies from !REQ_FILE! ...
   python -m pip install -r !REQ_FILE!
+)
+
+if /I "%HAS_XLS_SUPPORT%"=="yes" (
+  python -c "import xlrd" >nul 2>&1
+  if errorlevel 1 (
+    set "REQ_FILE=requirements.txt"
+    if exist "requirements.lock" set "REQ_FILE=requirements.lock"
+    echo Installing xls support from !REQ_FILE! ...
+    python -m pip install -r !REQ_FILE!
+  )
 )
 
 python scripts\health_check.py

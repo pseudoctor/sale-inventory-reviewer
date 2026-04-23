@@ -15,7 +15,7 @@ NORMALIZED_SALES_REQUIRED_COLUMNS: tuple[str, ...] = (
     "supplier_card",
     "sales_amount",
 )
-NORMALIZED_SALES_OPTIONAL_COLUMNS: tuple[str, ...] = ("national_barcode",)
+NORMALIZED_SALES_OPTIONAL_COLUMNS: tuple[str, ...] = ("national_barcode", "actual_barcode")
 
 NORMALIZED_INVENTORY_REQUIRED_COLUMNS: tuple[str, ...] = (
     "store",
@@ -27,6 +27,7 @@ NORMALIZED_INVENTORY_REQUIRED_COLUMNS: tuple[str, ...] = (
     "product_code",
     "supplier_card",
 )
+NORMALIZED_INVENTORY_OPTIONAL_COLUMNS: tuple[str, ...] = ("actual_barcode",)
 
 MATCHING_DETAIL_COLUMNS: tuple[str, ...] = (
     "store_key",
@@ -103,6 +104,8 @@ MISSING_SALES_REQUIRED_COLUMNS: tuple[str, ...] = (
 )
 
 MISSING_SALES_OPTIONAL_COLUMNS: tuple[str, ...] = (
+    "actual_barcode",
+    "sales_product_barcode",
     "sales_qty_total",
     "sales_qty_3m_mtd",
     "sales_qty_30d",

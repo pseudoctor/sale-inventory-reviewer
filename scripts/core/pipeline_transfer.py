@@ -167,11 +167,11 @@ def build_store_sales_ranking_transfer_frame(
             columns=[
                 "排名",
                 "门店名称",
-                "门店销售额总计",
+                store_amount_header,
                 "品牌",
                 "商品条码",
                 "商品名称",
-                "商品销售额",
+                item_amount_header,
                 "商品单价",
                 "调货数量",
                 "库存金额",
