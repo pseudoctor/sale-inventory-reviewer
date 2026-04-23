@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from scripts import health_check
+from scripts import check_xls_support_needed
 
 
 class HealthCheckTest(unittest.TestCase):
@@ -166,6 +167,33 @@ class HealthCheckTest(unittest.TestCase):
             ):
                 errors = health_check._check_config_and_paths()
             self.assertTrue(any("missing dependency 'xlrd'" in err for err in errors))
+
+    def test_check_xls_support_needed_detects_auto_scanned_single_mode_xls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "raw_data"
+            raw.mkdir()
+            (raw / "销售202602.xls").touch()
+
+            cfg = {
+                "run_mode": "single",
+                "raw_data_dir": "./raw_data",
+                "inventory_file": "库存.xlsx",
+                "sales_files": [],
+                "output_file": "",
+                "carton_factor_file": "./data/sku装箱数.xlsx",
+                "risk_days_high": 60,
+                "risk_days_low": 45,
+                "sales_window_full_months": 3,
+                "sales_window_include_mtd": True,
+                "sales_window_recent_days": 30,
+                "season_mode": False,
+                "brand_keywords": ["测试"],
+                "batch": {"continue_on_error": True, "summary_output_file": "./reports/batch_run_summary.xlsx", "systems": []},
+            }
+
+            with patch.object(check_xls_support_needed, "BASE_DIR", root):
+                self.assertTrue(check_xls_support_needed.config_needs_xls_support(cfg))
 
     def test_check_config_and_paths_does_not_require_xlrd_for_xlsx_only(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -460,11 +460,12 @@ class BatchModeTest(unittest.TestCase):
 
     def test_run_batch_continue_on_error_true(self):
         with tempfile.TemporaryDirectory() as tmp:
-            summary_path = Path(tmp) / "batch_run_summary.xlsx"
+            base_dir = Path(tmp)
+            summary_path = base_dir / "reports" / "batch_run_summary.xlsx"
             cfg = core_config.validate_config(
                 build_batch_config(
                     continue_on_error=True,
-                    summary_output_file=str(summary_path),
+                    summary_output_file="./reports/batch_run_summary.xlsx",
                     carton_factor_file="./data/carton.xlsx",
                     brand_keywords=["品牌A"],
                     systems=[
@@ -503,7 +504,10 @@ class BatchModeTest(unittest.TestCase):
                     "missing_sku_rows": 2,
                 }
 
-            with patch("scripts.generate_inventory_risk_report.generate_report_for_system", side_effect=fake_generate):
+            with (
+                patch("scripts.generate_inventory_risk_report.BASE_DIR", base_dir),
+                patch("scripts.generate_inventory_risk_report.generate_report_for_system", side_effect=fake_generate),
+            ):
                 failures = run_batch(cfg)
 
             self.assertEqual(failures, 1)
@@ -522,11 +526,12 @@ class BatchModeTest(unittest.TestCase):
 
     def test_run_batch_enabled_false_becomes_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
-            summary_path = Path(tmp) / "batch_run_summary.xlsx"
+            base_dir = Path(tmp)
+            summary_path = base_dir / "reports" / "batch_run_summary.xlsx"
             cfg = core_config.validate_config(
                 build_batch_config(
                     continue_on_error=True,
-                    summary_output_file=str(summary_path),
+                    summary_output_file="./reports/batch_run_summary.xlsx",
                     carton_factor_file="./data/carton.xlsx",
                     brand_keywords=["品牌A"],
                     systems=[
@@ -542,7 +547,10 @@ class BatchModeTest(unittest.TestCase):
                 )
             )
 
-            with patch("scripts.generate_inventory_risk_report.generate_report_for_system") as mocked_generate:
+            with (
+                patch("scripts.generate_inventory_risk_report.BASE_DIR", base_dir),
+                patch("scripts.generate_inventory_risk_report.generate_report_for_system") as mocked_generate,
+            ):
                 failures = run_batch(cfg)
             self.assertEqual(failures, 0)
             mocked_generate.assert_not_called()
@@ -557,11 +565,12 @@ class BatchModeTest(unittest.TestCase):
 
     def test_run_batch_continue_on_error_false(self):
         with tempfile.TemporaryDirectory() as tmp:
-            summary_path = Path(tmp) / "batch_run_summary.xlsx"
+            base_dir = Path(tmp)
+            summary_path = base_dir / "reports" / "batch_run_summary.xlsx"
             cfg = core_config.validate_config(
                 build_batch_config(
                     continue_on_error=False,
-                    summary_output_file=str(summary_path),
+                    summary_output_file="./reports/batch_run_summary.xlsx",
                     carton_factor_file="./data/carton.xlsx",
                     brand_keywords=["品牌A"],
                     systems=[
@@ -587,9 +596,12 @@ class BatchModeTest(unittest.TestCase):
                 )
             )
 
-            with patch(
-                "scripts.generate_inventory_risk_report.generate_report_for_system",
-                side_effect=FileNotFoundError("missing input"),
+            with (
+                patch("scripts.generate_inventory_risk_report.BASE_DIR", base_dir),
+                patch(
+                    "scripts.generate_inventory_risk_report.generate_report_for_system",
+                    side_effect=FileNotFoundError("missing input"),
+                ),
             ):
                 failures = run_batch(cfg)
 
@@ -605,11 +617,12 @@ class BatchModeTest(unittest.TestCase):
 
     def test_run_batch_summary_preserves_input_files_count_from_report_result(self):
         with tempfile.TemporaryDirectory() as tmp:
-            summary_path = Path(tmp) / "batch_run_summary.xlsx"
+            base_dir = Path(tmp)
+            summary_path = base_dir / "reports" / "batch_run_summary.xlsx"
             cfg = core_config.validate_config(
                 build_batch_config(
                     continue_on_error=True,
-                    summary_output_file=str(summary_path),
+                    summary_output_file="./reports/batch_run_summary.xlsx",
                     carton_factor_file="./data/carton.xlsx",
                     brand_keywords=["品牌A"],
                     systems=[
@@ -626,22 +639,25 @@ class BatchModeTest(unittest.TestCase):
                 )
             )
 
-            with patch(
-                "scripts.generate_inventory_risk_report.generate_report_for_system",
-                return_value={
-                    "system_id": "ok",
-                    "display_name": "好系统",
-                    "status": "SUCCESS",
-                    "message": "",
-                    "error_stage": "",
-                    "output_file": "./reports/a.xlsx",
-                    "input_files_count": 4,
-                    "loaded_sales_files": 2,
-                    "missing_sales_files": 1,
-                    "inventory_file_exists": True,
-                    "detail_rows": 10,
-                    "missing_sku_rows": 1,
-                },
+            with (
+                patch("scripts.generate_inventory_risk_report.BASE_DIR", base_dir),
+                patch(
+                    "scripts.generate_inventory_risk_report.generate_report_for_system",
+                    return_value={
+                        "system_id": "ok",
+                        "display_name": "好系统",
+                        "status": "SUCCESS",
+                        "message": "",
+                        "error_stage": "",
+                        "output_file": "./reports/a.xlsx",
+                        "input_files_count": 4,
+                        "loaded_sales_files": 2,
+                        "missing_sales_files": 1,
+                        "inventory_file_exists": True,
+                        "detail_rows": 10,
+                        "missing_sku_rows": 1,
+                    },
+                ),
             ):
                 failures = run_batch(cfg)
 

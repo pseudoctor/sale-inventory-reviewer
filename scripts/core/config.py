@@ -74,6 +74,42 @@ def _normalize_sales_file_entries(entries: list[str], field_name: str) -> list[s
     return normalized
 
 
+def _normalize_relative_subpath(value: object, field_name: str) -> str:
+    """限制配置子目录只能位于项目定义的父目录内。"""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string.")
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    path = Path(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{field_name} must stay within its parent directory using a relative path only: {value}")
+    return normalized
+
+
+def _normalize_output_path(value: object, field_name: str) -> str:
+    """限制输出文件路径只能写到 reports/ 目录下。"""
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string.")
+    normalized = value.strip()
+    if not normalized:
+        return ""
+    path = Path(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{field_name} must stay within reports/ using a relative path only: {value}")
+    parts = path.parts
+    if not parts or parts[0] not in {".", "reports"}:
+        raise ValueError(f"{field_name} must stay within reports/ using a relative path only: {value}")
+    if parts[0] == ".":
+        if len(parts) < 2 or parts[1] != "reports":
+            raise ValueError(f"{field_name} must stay within reports/ using a relative path only: {value}")
+    return normalized
+
+
 def validate_config(config: AppConfig) -> AppConfig:
     """校验并规范化主配置，供单系统和批量模式共用。"""
     run_mode = str(config.get("run_mode", "single")).strip().lower()
@@ -83,21 +119,15 @@ def validate_config(config: AppConfig) -> AppConfig:
 
     if not isinstance(config.get("raw_data_dir"), str) or not str(config["raw_data_dir"]).strip():
         raise ValueError("config.raw_data_dir must be a non-empty string.")
-    data_subdir = config.get("data_subdir", "")
-    if data_subdir is not None and not isinstance(data_subdir, str):
-        raise ValueError("config.data_subdir must be a string.")
+    data_subdir = _normalize_relative_subpath(config.get("data_subdir", ""), "config.data_subdir")
+    config["data_subdir"] = data_subdir
     display_name = config.get("display_name", "")
     if display_name is not None and not isinstance(display_name, str):
         raise ValueError("config.display_name must be a string.")
     system_id = config.get("system_id", "")
     if system_id is not None and not isinstance(system_id, str):
         raise ValueError("config.system_id must be a string.")
-    output_file = config.get("output_file", "")
-    if output_file is None:
-        output_file = ""
-    if not isinstance(output_file, str):
-        raise ValueError("config.output_file must be a string.")
-    config["output_file"] = output_file.strip()
+    config["output_file"] = _normalize_output_path(config.get("output_file", ""), "config.output_file")
 
     if run_mode == "single":
         if not isinstance(config.get("inventory_file"), str) or not str(config["inventory_file"]).strip():
@@ -185,8 +215,11 @@ def validate_config(config: AppConfig) -> AppConfig:
     continue_on_error = batch.get("continue_on_error", True)
     if not isinstance(continue_on_error, bool):
         raise ValueError("config.batch.continue_on_error must be true/false.")
-    summary_output_file = batch.get("summary_output_file", "./reports/batch_run_summary.xlsx")
-    if not isinstance(summary_output_file, str) or not summary_output_file.strip():
+    summary_output_file = _normalize_output_path(
+        batch.get("summary_output_file", "./reports/batch_run_summary.xlsx"),
+        "config.batch.summary_output_file",
+    )
+    if not summary_output_file:
         raise ValueError("config.batch.summary_output_file must be a non-empty string.")
     systems = batch.get("systems", [])
     if not isinstance(systems, list):
@@ -225,9 +258,11 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
             raise ValueError(f"Duplicated display_name in batch.systems: {display_name}")
         seen_display_names.add(display_name)
 
-        data_subdir = typed_system.get("data_subdir", "")
-        if data_subdir is not None and not isinstance(data_subdir, str):
-            raise ValueError(f"batch.systems[{idx}].data_subdir must be a string.")
+        data_subdir = _normalize_relative_subpath(
+            typed_system.get("data_subdir", ""),
+            f"batch.systems[{idx}].data_subdir",
+        )
+        typed_system["data_subdir"] = data_subdir
 
         system_id = str(typed_system.get("system_id", "")).strip() or display_name
         if system_id in seen_ids:
@@ -257,9 +292,11 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
 
         out_file = typed_system.get("output_file")
         if out_file is not None:
-            if not isinstance(out_file, str) or not out_file.strip():
+            normalized_output = _normalize_output_path(out_file, f"batch.systems[{idx}].output_file")
+            if not normalized_output:
                 raise ValueError(f"batch.systems[{idx}].output_file must be a non-empty string if provided.")
-            out_path = Path(out_file.strip())
+            typed_system["output_file"] = normalized_output
+            out_path = Path(normalized_output)
             normalized = str((base_dir / out_path).resolve()) if not out_path.is_absolute() else str(out_path.resolve())
             if normalized in seen_output_paths:
                 raise ValueError(f"Duplicated output_file in batch.systems[{idx}]: {out_file}")
