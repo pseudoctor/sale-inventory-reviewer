@@ -982,6 +982,57 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(row["product"], "名称B")
         self.assertEqual(row["brand"], "品牌B")
 
+    def test_matching_keeps_sales_rows_when_product_code_and_barcode_are_blank(self):
+        sales_df = pd.DataFrame(
+            {
+                "store": ["门店A"],
+                "store_code": ["S1"],
+                "brand": ["品牌A"],
+                "product": ["无编码SKU"],
+                "barcode": [None],
+                "product_code": [None],
+                "display_barcode": [None],
+                "sales_qty": [10],
+                "sales_date": pd.to_datetime(["2026-02-08"]),
+                "supplier_card": [None],
+            }
+        )
+        inv_df = pd.DataFrame(
+            {
+                "store": ["门店A"],
+                "store_code": ["S1"],
+                "brand": ["品牌A"],
+                "product": ["库存SKU"],
+                "barcode": ["6901"],
+                "product_code": [None],
+                "inventory_qty": [5],
+                "supplier_card": [None],
+            }
+        )
+
+        detail, missing_sales, *_ = core_matching.build_detail_with_matching(
+            sales_df=sales_df,
+            inv_df=inv_df,
+            mtd_start=pd.Timestamp("2026-02-01"),
+            mtd_end=pd.Timestamp("2026-02-09"),
+            recent_start=pd.Timestamp("2026-01-11"),
+            inventory_date_ts=pd.Timestamp("2026-02-09"),
+            mtd_days=9,
+            recent_days_effective=30,
+            has_mtd_window_data=True,
+            has_recent_window_data=True,
+            use_peak_mode=False,
+            low_days=45,
+            high_days=60,
+            is_wumei_system=False,
+            province_mapper=lambda _: "其他/未知",
+        )
+
+        self.assertEqual(len(missing_sales), 1)
+        self.assertEqual(missing_sales.iloc[0]["product_key"], "无编码SKU")
+        self.assertGreater(float(missing_sales.iloc[0]["daily_sales_3m_mtd"]), 0)
+        self.assertTrue((detail["product"] == "无编码SKU").any())
+
     def test_wumei_matches_by_store_code_and_product_code_and_keeps_national_barcode_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

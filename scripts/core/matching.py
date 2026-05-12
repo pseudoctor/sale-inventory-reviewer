@@ -16,8 +16,11 @@ def _prepare_match_keys(df: pd.DataFrame) -> pd.DataFrame:
     out["store_key"] = out.get("store_code", pd.Series(index=out.index)).apply(core_io.normalize_barcode_value)
     out["product_key"] = out.get("product_code", pd.Series(index=out.index)).apply(core_io.normalize_barcode_value)
     out["barcode_key"] = out["barcode"].apply(core_io.normalize_barcode_value)
+    product_name_key = out["product"].fillna("").astype(str).str.strip()
+    product_name_key = product_name_key.where(~product_name_key.str.lower().isin({"", "nan", "none"}), None)
     out["store_key"] = out["store_key"].where(out["store_key"].notna(), out["store"])
     out["product_key"] = out["product_key"].where(out["product_key"].notna(), out["barcode_key"])
+    out["product_key"] = out["product_key"].where(out["product_key"].notna(), product_name_key)
     return out
 
 

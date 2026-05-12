@@ -10,7 +10,7 @@ sales_files:
   - "陕西华润销售202602.xlsx"
   - "陕西华润销售202603.xlsx"
   - "陕西华润销售202604.xlsx"
-  - “陕西华润销售202605.xlsx”
+  - "陕西华润销售202605.xlsx"
 inventory_file: "陕西华润库存.xlsx"
 
 risk_days_high: 60

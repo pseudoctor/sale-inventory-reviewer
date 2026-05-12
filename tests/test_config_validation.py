@@ -78,6 +78,47 @@ class ConfigValidationTest(unittest.TestCase):
                 }
             )
 
+    def test_validate_config_rejects_inventory_file_escape_paths(self):
+        for inventory_file in ["../outside.xlsx", "/tmp/outside.xlsx"]:
+            with self.subTest(inventory_file=inventory_file):
+                with self.assertRaises(ValueError):
+                    validate_config(
+                        {
+                            "raw_data_dir": "./raw_data",
+                            "output_file": "./reports/x.xlsx",
+                            "sales_files": [],
+                            "inventory_file": inventory_file,
+                            "risk_days_high": 60,
+                            "risk_days_low": 45,
+                            "sales_window_full_months": 3,
+                            "sales_window_include_mtd": True,
+                            "sales_window_recent_days": 30,
+                            "season_mode": False,
+                            "brand_keywords": ["品牌A"],
+                        }
+                    )
+
+    def test_validate_config_rejects_carton_factor_escape_paths(self):
+        for carton_factor_file in ["../outside.xlsx", "/tmp/outside.xlsx"]:
+            with self.subTest(carton_factor_file=carton_factor_file):
+                with self.assertRaises(ValueError):
+                    validate_config(
+                        {
+                            "raw_data_dir": "./raw_data",
+                            "output_file": "./reports/x.xlsx",
+                            "sales_files": [],
+                            "inventory_file": "库存.xlsx",
+                            "risk_days_high": 60,
+                            "risk_days_low": 45,
+                            "sales_window_full_months": 3,
+                            "sales_window_include_mtd": True,
+                            "sales_window_recent_days": 30,
+                            "season_mode": False,
+                            "carton_factor_file": carton_factor_file,
+                            "brand_keywords": ["品牌A"],
+                        }
+                    )
+
     def test_validate_config_rejects_data_subdir_parent_path(self):
         with self.assertRaises(ValueError):
             validate_config(

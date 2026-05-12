@@ -74,6 +74,17 @@ def _normalize_sales_file_entries(entries: list[str], field_name: str) -> list[s
     return normalized
 
 
+def _normalize_relative_file_path(value: object, field_name: str) -> str:
+    """限制输入文件路径为相对路径，避免读取配置目录外的文件。"""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string.")
+    normalized = value.strip()
+    path = Path(normalized)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{field_name} must use a relative path only (no absolute path or '..'): {value}")
+    return normalized
+
+
 def _normalize_relative_subpath(value: object, field_name: str) -> str:
     """限制配置子目录只能位于项目定义的父目录内。"""
     if value is None:
@@ -130,12 +141,12 @@ def validate_config(config: AppConfig) -> AppConfig:
     config["output_file"] = _normalize_output_path(config.get("output_file", ""), "config.output_file")
 
     if run_mode == "single":
-        if not isinstance(config.get("inventory_file"), str) or not str(config["inventory_file"]).strip():
-            raise ValueError("config.inventory_file must be a non-empty string in single mode.")
+        config["inventory_file"] = _normalize_relative_file_path(config.get("inventory_file"), "config.inventory_file")
 
-    carton_factor_file = config.get("carton_factor_file", "")
-    if not isinstance(carton_factor_file, str) or not carton_factor_file.strip():
-        raise ValueError("config.carton_factor_file must be a non-empty string.")
+    config["carton_factor_file"] = _normalize_relative_file_path(
+        config.get("carton_factor_file"),
+        "config.carton_factor_file",
+    )
 
     sales_files = config.get("sales_files")
     if not isinstance(sales_files, list):
@@ -287,8 +298,10 @@ def validate_batch_config(config: AppConfig, base_dir: Path) -> None:
         )
 
         inv_file = typed_system.get("inventory_file")
-        if not isinstance(inv_file, str) or not inv_file.strip():
-            raise ValueError(f"batch.systems[{idx}].inventory_file must be a non-empty string.")
+        typed_system["inventory_file"] = _normalize_relative_file_path(
+            inv_file,
+            f"batch.systems[{idx}].inventory_file",
+        )
 
         out_file = typed_system.get("output_file")
         if out_file is not None:
@@ -319,7 +332,10 @@ def build_system_config(system_cfg: BatchSystemConfig, global_cfg: AppConfig) ->
 
     carton_factor_file = system_cfg.get("carton_factor_file")
     if isinstance(carton_factor_file, str) and carton_factor_file.strip():
-        merged["carton_factor_file"] = carton_factor_file.strip()
+        merged["carton_factor_file"] = _normalize_relative_file_path(
+            carton_factor_file,
+            "batch.systems.carton_factor_file",
+        )
 
     if "province_column_enabled" in system_cfg:
         merged["province_column_enabled"] = system_cfg.get("province_column_enabled")
