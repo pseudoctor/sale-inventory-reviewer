@@ -10,6 +10,7 @@ sales_files:
   - "陕西华润销售202602.xlsx"
   - "陕西华润销售202603.xlsx"
   - "陕西华润销售202604.xlsx"
+  - “陕西华润销售202605.xlsx”
 inventory_file: "陕西华润库存.xlsx"
 
 risk_days_high: 60
@@ -58,8 +59,8 @@ batch:
       province_column_enabled: true
       data_subdir: "宁夏物美"
       sales_files:
-        - "物美销售202601-202603.xls"
-        - "物美销售202604.xls"
+        - "物美销售202601-202604.xls"
+        - "物美销售202605.xls"
       inventory_file: "物美库存.xls"
       carton_factor_file: "./data/sku装箱数.xlsx"
     - enabled: true
@@ -73,6 +74,7 @@ batch:
         - "陕西华润销售202602.xlsx"
         - "陕西华润销售202603.xlsx"
         - "陕西华润销售202604.xlsx"
+        - "陕西华润销售202605.xlsx"
       inventory_file: "陕西华润库存.xlsx"
     - enabled: true
       system_id: "ganning_huarun"
@@ -83,4 +85,5 @@ batch:
         - "甘宁华润销售202602.xlsx"
         - "甘宁华润销售202603.xlsx"
         - "甘宁华润销售202604.xlsx"
+        - "甘宁华润销售202605.xlsx"
       inventory_file: "甘宁华润库存.xlsx"
