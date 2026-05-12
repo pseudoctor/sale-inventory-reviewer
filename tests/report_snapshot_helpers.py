@@ -49,7 +49,7 @@ def capture_report(output_file: Path, expected_snapshot_name: str) -> None:
             detail,
             ["门店名称", "商品名称", "商品条码", "近三月+本月迄今平均日销", "库存数量", "风险等级", "建议调出数量", "建议补货数量"],
         ),
-        "catalog": normalize_records(catalog, ["商品编码", "品牌", "标准商品名", "销售表商品名", "库存商品名", "来源状态"]),
+        "catalog": normalize_records(catalog, ["商品条码", "商品编码", "商品名称", "品牌", "销售表商品名", "库存商品名", "来源状态"]),
         "replenish": normalize_records(
             replenish,
             [c for c in ["门店名称", "商品名称", "省份", "装箱数（因子）", "建议补货数量", "建议补货箱数"] if c in replenish.columns],

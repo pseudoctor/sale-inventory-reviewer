@@ -48,37 +48,48 @@ def has_non_empty_text(series: pd.Series) -> pd.Series:
 
 def build_product_code_catalog(sales_df: pd.DataFrame, inv_df: pd.DataFrame) -> pd.DataFrame:
     """汇总销售/库存两侧商品编码与标准名称，用于人工核对。"""
-    sales_base = sales_df[["product_code", "brand", "product"]].copy()
+    sales_barcode_col = "display_barcode" if "display_barcode" in sales_df.columns else "barcode"
+    sales_base = sales_df[["product_code", sales_barcode_col, "brand", "product"]].copy()
     sales_base["product_code"] = sales_base["product_code"].apply(core_io.normalize_barcode_value)
+    sales_base[sales_barcode_col] = sales_base[sales_barcode_col].apply(core_io.normalize_barcode_value)
     sales_base = sales_base.dropna(subset=["product_code"])
     sales_grouped = (
         sales_base.groupby("product_code", as_index=False)
         .agg(
+            sales_barcode=(sales_barcode_col, join_unique_text),
             sales_brand=("brand", join_unique_text),
             sales_product_name=("product", join_unique_text),
         )
     )
 
-    inv_base = inv_df[["product_code", "brand", "product"]].copy()
+    inv_barcode_col = "actual_barcode" if "actual_barcode" in inv_df.columns else "barcode"
+    inv_base = inv_df[["product_code", inv_barcode_col, "brand", "product"]].copy()
     inv_base["product_code"] = inv_base["product_code"].apply(core_io.normalize_barcode_value)
+    inv_base[inv_barcode_col] = inv_base[inv_barcode_col].apply(core_io.normalize_barcode_value)
     inv_base = inv_base.dropna(subset=["product_code"])
     inv_grouped = (
         inv_base.groupby("product_code", as_index=False)
         .agg(
+            inventory_barcode=(inv_barcode_col, join_unique_text),
             inventory_brand=("brand", join_unique_text),
             inventory_product_name=("product", join_unique_text),
         )
     )
 
     catalog = sales_grouped.merge(inv_grouped, on="product_code", how="outer")
+    catalog["barcode"] = catalog["sales_barcode"].where(
+        has_non_empty_text(catalog["sales_barcode"]),
+        catalog["inventory_barcode"],
+    )
     catalog["brand"] = catalog["sales_brand"].where(
-        catalog["sales_brand"].astype(str).str.strip() != "",
+        has_non_empty_text(catalog["sales_brand"]),
         catalog["inventory_brand"],
     )
     catalog["standard_product_name"] = catalog["sales_product_name"].where(
-        catalog["sales_product_name"].astype(str).str.strip() != "",
+        has_non_empty_text(catalog["sales_product_name"]),
         catalog["inventory_product_name"],
     )
+    catalog["barcode"] = catalog["barcode"].fillna("")
     catalog["brand"] = catalog["brand"].fillna("")
     catalog["standard_product_name"] = catalog["standard_product_name"].fillna("")
     catalog["sales_product_name"] = catalog["sales_product_name"].fillna("")
@@ -89,6 +100,7 @@ def build_product_code_catalog(sales_df: pd.DataFrame, inv_df: pd.DataFrame) -> 
     catalog.loc[sales_exists & ~inventory_exists, "source_status"] = "仅销售表"
     catalog.loc[sales_exists & inventory_exists, "source_status"] = "两表均存在"
     return catalog[[
+        "barcode",
         "product_code",
         "brand",
         "standard_product_name",

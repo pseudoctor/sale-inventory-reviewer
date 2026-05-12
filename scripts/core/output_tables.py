@@ -293,11 +293,15 @@ def _attach_case_columns_to_action_frames(
 
 def _build_product_code_catalog_frame(product_code_catalog: pd.DataFrame) -> pd.DataFrame:
     """构建商品编码对照清单工作表。"""
+    product_code_catalog = product_code_catalog.copy()
+    if "barcode" not in product_code_catalog.columns:
+        product_code_catalog["barcode"] = ""
     return product_code_catalog.rename(
         columns={
+            "barcode": "商品条码",
             "product_code": "商品编码",
             "brand": "品牌",
-            "standard_product_name": "标准商品名",
+            "standard_product_name": "商品名称",
             "sales_product_name": "销售表商品名",
             "inventory_product_name": "库存商品名",
             "source_status": "来源状态",

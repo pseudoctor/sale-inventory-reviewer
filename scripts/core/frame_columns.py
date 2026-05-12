@@ -173,9 +173,10 @@ TRANSFER_REQUIRED_COLUMNS: tuple[str, ...] = ("门店名称", "品牌", "商品�
 TRANSFER_OPTIONAL_COLUMNS: tuple[str, ...] = ("省份", "近三月+本月迄今平均日销", "近30天平均日销售", "库存数量", "风险等级", "装箱数（因子）")
 
 PRODUCT_CODE_CATALOG_COLUMNS: tuple[str, ...] = (
+    "商品条码",
     "商品编码",
+    "商品名称",
     "品牌",
-    "标准商品名",
     "销售表商品名",
     "库存商品名",
     "来源状态",

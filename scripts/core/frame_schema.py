@@ -171,8 +171,8 @@ REPORT_FRAME_SCHEMAS = {
     ),
     "商品编码对照清单": FrameSchema(
         "report.product_code_catalog",
-        ("商品编码", "品牌", "标准商品名", "来源状态"),
-        optional_columns=tuple(column for column in core_frame_columns.PRODUCT_CODE_CATALOG_COLUMNS if column not in ("商品编码", "品牌", "标准商品名", "来源状态")),
+        ("商品条码", "商品编码", "商品名称", "来源状态"),
+        optional_columns=tuple(column for column in core_frame_columns.PRODUCT_CODE_CATALOG_COLUMNS if column not in ("商品条码", "商品编码", "商品名称", "来源状态")),
         allow_unknown_columns=False,
         description="商品编码主数据对照页。",
     ),
