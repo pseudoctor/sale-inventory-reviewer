@@ -28,8 +28,8 @@ def _fail(msg: str) -> None:
 
 def _check_python() -> list[str]:
     errors: list[str] = []
-    if sys.version_info < (3, 11):
-        errors.append(f"Python >= 3.11 required, current: {sys.version.split()[0]}")
+    if sys.version_info < (3, 10):
+        errors.append(f"Python >= 3.10 required, current: {sys.version.split()[0]}")
     return errors
 
 

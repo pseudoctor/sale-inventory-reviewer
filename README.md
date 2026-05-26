@@ -74,7 +74,7 @@ run.bat
 ```
 
 ## Development Setup
-The canonical local development environment is Python `3.11` with `venv` and `requirements.lock`.
+The canonical local development environment is Python `3.10+` with `venv` and `requirements.lock`.
 
 Bootstrap or refresh dependencies:
 ```bash

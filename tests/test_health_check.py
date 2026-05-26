@@ -15,9 +15,14 @@ class HealthCheckTest(unittest.TestCase):
         self.assertIsInstance(errors, list)
 
     def test_check_python_rejects_unsupported_runtime(self):
+        with patch.object(health_check.sys, "version_info", (3, 9, 18)):
+            errors = health_check._check_python()
+        self.assertTrue(any("Python >= 3.10 required" in err for err in errors))
+
+    def test_check_python_accepts_python_310(self):
         with patch.object(health_check.sys, "version_info", (3, 10, 12)):
             errors = health_check._check_python()
-        self.assertTrue(any("Python >= 3.11 required" in err for err in errors))
+        self.assertEqual(errors, [])
 
     def test_check_dependencies_reports_missing_package(self):
         def fake_import(name):

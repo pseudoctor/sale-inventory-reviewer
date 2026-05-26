@@ -4,12 +4,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-if command -v python3.11 &> /dev/null; then
-  PYTHON_BIN="python3.11"
-elif command -v python3 &> /dev/null; then
-  PYTHON_BIN="python3"
-else
-  echo "Error: Python 3.11 is not installed"
+PYTHON_BIN=""
+for candidate in python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+  if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >/dev/null 2>&1; then
+    PYTHON_BIN="$candidate"
+    break
+  fi
+done
+
+if [ -z "$PYTHON_BIN" ]; then
+  echo "Error: Python 3.10 or newer is not installed or not in PATH"
   exit 1
 fi
 
@@ -26,8 +30,8 @@ else
   source venv/bin/activate
 fi
 
-if ! python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >/dev/null 2>&1; then
-  echo "Error: the virtual environment is not using Python 3.11+"
+if ! python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)" >/dev/null 2>&1; then
+  echo "Error: the virtual environment is not using Python 3.10+"
   exit 1
 fi
 
