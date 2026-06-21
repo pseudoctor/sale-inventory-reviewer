@@ -262,6 +262,7 @@ def apply_wumei_barcode_mapping(
     inv_df: pd.DataFrame,
     sales_df: pd.DataFrame,
     profile: SystemRuleProfile,
+    mapping_df: Optional[pd.DataFrame] = None,
 ) -> BarcodeMappingResult:
     """保留旧函数名作为兼容入口，内部委托系统规则模块处理。"""
     from . import system_rules as core_system_rules
@@ -271,4 +272,5 @@ def apply_wumei_barcode_mapping(
         inv_df=inv_df,
         sales_df=sales_df,
         profile=profile,
+        mapping_df=mapping_df,
     )

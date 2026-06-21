@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -14,6 +15,7 @@ SUPPLIER_CARD_PROVINCE_MAP = {
     "153412": "宁夏",
     "152901": "监狱系统",
 }
+WUMEI_BARCODE_MAPPING_RELATIVE_PATH = Path("data/物美商品条码映射.csv")
 
 
 @dataclass(frozen=True)
@@ -56,8 +58,37 @@ def apply_inventory_barcode_mapping(
     inv_df: pd.DataFrame,
     sales_df: pd.DataFrame,
     profile: SystemRuleProfile,
+    mapping_df: Optional[pd.DataFrame] = None,
 ) -> BarcodeMappingResult:
-    """预留系统级条码映射扩展点，当前默认保持透传。"""
-    _ = sales_df
-    _ = profile
-    return BarcodeMappingResult(inventory_df=inv_df)
+    """仅对物美库存缺失条码应用历史映射，当前销售数据始终优先。"""
+    if not profile.is_wumei_system or mapping_df is None:
+        return BarcodeMappingResult(inventory_df=inv_df)
+
+    out = inv_df.copy()
+    product_codes = out["product_code"].apply(core_io.normalize_barcode_value)
+    actual_barcodes = out["actual_barcode"].apply(core_io.normalize_barcode_value)
+    reference_map = dict(zip(mapping_df["product_code"], mapping_df["mapped_barcode"]))
+
+    sales_pairs = sales_df[["product_code", "display_barcode"]].copy()
+    sales_pairs["product_code"] = sales_pairs["product_code"].apply(core_io.normalize_barcode_value)
+    sales_pairs["display_barcode"] = sales_pairs["display_barcode"].apply(core_io.normalize_barcode_value)
+    sales_pairs = sales_pairs.dropna().drop_duplicates()
+    sales_codes = set(sales_pairs["product_code"])
+
+    conflict_codes: list[str] = []
+    for product_code, group in sales_pairs.groupby("product_code"):
+        mapped_barcode = reference_map.get(product_code)
+        if mapped_barcode is not None and set(group["display_barcode"]) != {mapped_barcode}:
+            conflict_codes.append(str(product_code))
+
+    candidates = product_codes.map(reference_map)
+    use_mapping = actual_barcodes.isna() & candidates.notna() & ~product_codes.isin(sales_codes)
+    out.loc[use_mapping, "actual_barcode"] = candidates[use_mapping]
+    fallback = int((actual_barcodes.isna() & ~product_codes.isin(sales_codes) & candidates.isna()).sum())
+    return BarcodeMappingResult(
+        inventory_df=out,
+        hits=int(use_mapping.sum()),
+        fallback=fallback,
+        conflicts=len(conflict_codes),
+        conflict_samples=", ".join(conflict_codes[:10]),
+    )

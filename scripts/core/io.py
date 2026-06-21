@@ -29,6 +29,40 @@ def read_excel_first_sheet(path: Path) -> pd.DataFrame:
     return pd.read_excel(path, sheet_name=0, dtype=str)
 
 
+def load_product_barcode_mapping(path: Path) -> pd.DataFrame:
+    """读取并校验商品编码到国条码的一对一映射。"""
+    if not path.exists():
+        raise FileNotFoundError(f"Product barcode mapping file not found: {path}")
+
+    mapping = pd.read_csv(path, dtype=str)
+    mapping.columns = mapping.columns.str.strip()
+    required_columns = {"商品编码", "国条码"}
+    missing_columns = sorted(required_columns - set(mapping.columns))
+    if missing_columns:
+        raise ValueError(f"Product barcode mapping missing columns: {', '.join(missing_columns)}")
+
+    mapping = mapping[["商品编码", "国条码"]].copy()
+    mapping.columns = ["product_code", "mapped_barcode"]
+    mapping["product_code"] = mapping["product_code"].apply(normalize_barcode_value)
+    mapping["mapped_barcode"] = mapping["mapped_barcode"].apply(normalize_barcode_value)
+    invalid = mapping[
+        mapping["product_code"].isna()
+        | ~mapping["mapped_barcode"].fillna("").str.fullmatch(r"(?:\d{8}|\d{12,14})")
+    ]
+    if not invalid.empty:
+        rows = ", ".join(str(index + 2) for index in invalid.index[:10])
+        raise ValueError(f"Product barcode mapping contains invalid rows: {rows}")
+
+    dedup = mapping.drop_duplicates()
+    conflicts = dedup.groupby("product_code")["mapped_barcode"].nunique()
+    conflict_codes = conflicts[conflicts > 1].index.tolist()
+    if conflict_codes:
+        samples = ", ".join(str(code) for code in conflict_codes[:10])
+        raise ValueError(f"Product barcode mapping contains conflicting product codes: {samples}")
+
+    return dedup.drop_duplicates(subset=["product_code"], keep="first").reset_index(drop=True)
+
+
 def build_unambiguous_barcode_map(df: pd.DataFrame, group_cols: List[str], value_col: str, output_col: str) -> pd.DataFrame:
     base = df[group_cols + [value_col]].copy()
     base[value_col] = base[value_col].apply(normalize_barcode_value)

@@ -329,7 +329,7 @@ def test_multi_store_product_code_matching_uses_store_code_and_does_not_fallback
     assert b_daily > 0.0
 
 
-def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
+def test_wumei_historical_barcode_mapping_and_unknown_fallbacks(tmp_path: Path):
     raw_root = tmp_path / "raw_data"
     system_dir = raw_root / "宁夏物美"
     data_dir = tmp_path / "data"
@@ -351,12 +351,12 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     _write_excel(
         pd.DataFrame(
             {
-                "门店名称": ["物美B店"],
-                "品牌": ["品牌M"],
-                "商品名称": ["无国条码SKU"],
-                "商品编码": ["817620"],
-                "当前库存": [0],
-                "库存日期": ["2026-02-09"],
+                "门店名称": ["物美B店", "物美B店"],
+                "品牌": ["品牌M", "蒙牛"],
+                "商品名称": ["无国条码SKU", "欧世蒙牛全脂甜奶粉400g"],
+                "商品编码": ["817620", "174400"],
+                "当前库存": [0, 3],
+                "库存日期": ["2026-02-09", "2026-02-09"],
             }
         ),
         system_dir / "库存.xls",
@@ -364,9 +364,9 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     _write_excel(
         pd.DataFrame(
             {
-                "商品条码": ["817620"],
-                "商品名称": ["无国条码SKU"],
-                "装箱数（因子）": [6],
+                "商品条码": ["817620", "6940187260610"],
+                "商品名称": ["无国条码SKU", "欧世蒙牛全脂甜奶粉400g"],
+                "装箱数（因子）": [6, 6],
             }
         ),
         data_dir / "sku装箱数.xlsx",
@@ -399,12 +399,13 @@ def test_wumei_missing_national_barcode_and_supplier_fallbacks(tmp_path: Path):
     generate_report_for_system(config, config)
     detail = pd.read_excel(output_file, sheet_name="明细", header=1)
     detail["门店名称"] = detail["门店名称"].ffill()
-    row = detail.iloc[0]
-    assert str(row["商品条码"]) == "817620"
-    assert row["省份"] == "其他/未知"
+    barcode_by_product = dict(zip(detail["商品名称"], detail["商品条码"].astype(str)))
+    assert barcode_by_product["无国条码SKU"] == "817620"
+    assert barcode_by_product["欧世蒙牛全脂甜奶粉400g"] == "6940187260610"
+    assert set(detail["省份"]) == {"其他/未知"}
 
 
-def test_detail_barcode_backfills_from_sales_by_product_code(tmp_path: Path):
+def test_detail_barcode_backfills_from_sales_by_product_code_across_stores(tmp_path: Path):
     raw_root = tmp_path / "raw_data"
     system_dir = raw_root / "陕西华润"
     data_dir = tmp_path / "data"
@@ -413,7 +414,7 @@ def test_detail_barcode_backfills_from_sales_by_product_code(tmp_path: Path):
     _write_excel(
         pd.DataFrame(
             {
-                "门店名称": ["门店A"],
+                "门店名称": ["门店B"],
                 "品牌": ["品牌B"],
                 "商品名称": ["回填条码SKU"],
                 "商品编码": ["817620"],
@@ -476,6 +477,7 @@ def test_detail_barcode_backfills_from_sales_by_product_code(tmp_path: Path):
     detail = pd.read_excel(output_file, sheet_name="明细", header=1)
     detail["门店名称"] = detail["门店名称"].ffill()
     row = detail.iloc[0]
+    assert row["门店名称"] == "门店A"
     assert str(row["商品条码"]) == "6901234567890"
 
 

@@ -218,7 +218,6 @@ def build_detail_with_matching(
                 "display_product_name",
                 "display_brand",
                 "display_barcode",
-                "sales_product_barcode",
                 "supplier_card",
                 "name_source_ts",
                 "brand_source_ts",
@@ -227,6 +226,11 @@ def build_detail_with_matching(
             ]
         ],
         on=["store_key", "product_key"],
+        how="left",
+    )
+    detail = detail.merge(
+        sales_product_barcode_mapping,
+        on=["product_key"],
         how="left",
     )
 

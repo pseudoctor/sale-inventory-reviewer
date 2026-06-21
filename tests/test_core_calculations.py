@@ -178,6 +178,74 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertIs(result.inventory_df, inv_df)
         self.assertEqual(result.hits, 0)
 
+    def test_load_product_barcode_mapping_rejects_conflicting_codes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mapping.csv"
+            pd.DataFrame(
+                {
+                    "商品编码": ["174400", "174400"],
+                    "国条码": ["6940187260610", "6940187260611"],
+                }
+            ).to_csv(path, index=False)
+
+            with self.assertRaisesRegex(ValueError, "conflicting product codes: 174400"):
+                core_io.load_product_barcode_mapping(path)
+
+    def test_wumei_barcode_mapping_backfills_only_codes_missing_from_current_sales(self):
+        profile = core_system_rules.resolve_system_rule_profile("宁夏物美", {"system_id": "ningxia_wumei"})
+        inv_df = pd.DataFrame(
+            {
+                "product_code": ["174400", "999999"],
+                "actual_barcode": [None, None],
+            }
+        )
+        sales_df = pd.DataFrame(columns=["product_code", "display_barcode"])
+        mapping_df = pd.DataFrame(
+            {
+                "product_code": ["174400"],
+                "mapped_barcode": ["6940187260610"],
+            }
+        )
+
+        result = core_system_rules.apply_inventory_barcode_mapping(
+            inv_df=inv_df,
+            sales_df=sales_df,
+            profile=profile,
+            mapping_df=mapping_df,
+        )
+
+        self.assertEqual(result.inventory_df["actual_barcode"].tolist(), ["6940187260610", None])
+        self.assertEqual(result.hits, 1)
+        self.assertEqual(result.fallback, 1)
+
+    def test_wumei_current_sales_barcode_takes_priority_over_historical_mapping(self):
+        profile = core_system_rules.resolve_system_rule_profile("宁夏物美", {"system_id": "ningxia_wumei"})
+        inv_df = pd.DataFrame({"product_code": ["174400"], "actual_barcode": [None]})
+        sales_df = pd.DataFrame(
+            {
+                "product_code": ["174400"],
+                "display_barcode": ["6999999999999"],
+            }
+        )
+        mapping_df = pd.DataFrame(
+            {
+                "product_code": ["174400"],
+                "mapped_barcode": ["6940187260610"],
+            }
+        )
+
+        result = core_system_rules.apply_inventory_barcode_mapping(
+            inv_df=inv_df,
+            sales_df=sales_df,
+            profile=profile,
+            mapping_df=mapping_df,
+        )
+
+        self.assertIsNone(result.inventory_df.loc[0, "actual_barcode"])
+        self.assertEqual(result.hits, 0)
+        self.assertEqual(result.conflicts, 1)
+        self.assertEqual(result.conflict_samples, "174400")
+
     def test_matching_returns_result_object(self):
         sales_df = pd.DataFrame(
             {

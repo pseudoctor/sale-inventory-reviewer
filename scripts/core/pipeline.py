@@ -142,10 +142,19 @@ def _prepare_input_stage(ctx: ReportRunContext) -> InputStageResult:
             raise
         raise stage_error("normalize", exc) from exc
 
+    barcode_mapping_df = None
+    if ctx.rule_profile.is_wumei_system:
+        mapping_path = ctx.base_dir / core_system_rules.WUMEI_BARCODE_MAPPING_RELATIVE_PATH
+        try:
+            barcode_mapping_df = core_io.load_product_barcode_mapping(mapping_path)
+        except Exception as exc:  # noqa: BLE001
+            raise stage_error("input_read", exc) from exc
+
     barcode_mapping = core_pipeline_inputs.apply_wumei_barcode_mapping(
         inv_df=inventory_prep.inventory_df,
         sales_df=sales_load.sales_df,
         profile=ctx.rule_profile,
+        mapping_df=barcode_mapping_df,
     )
 
     carton_factor_path = Path(ctx.carton_factor_file)

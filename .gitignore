@@ -38,7 +38,8 @@ temp/
 .cache/
 
 .DS_Store
-data/
+data/*
+!data/物美商品条码映射.csv
 raw_data/
 reports/
 venv/
