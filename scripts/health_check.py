@@ -125,13 +125,12 @@ def _check_config_and_paths() -> list[str]:
                     errors.append(
                         f"batch.systems[{idx}] '{merged['display_name']}' missing sales files: {', '.join(missing_sales)}"
                     )
-                if bool(merged.get("enable_ranked_store_transfer_summary", False)):
-                    errors.extend(
-                        [
-                            f"batch.systems[{idx}] '{merged['display_name']}' {msg}"
-                            for msg in _check_sales_amount_columns(sales_files)
-                        ]
-                    )
+                errors.extend(
+                    [
+                        f"batch.systems[{idx}] '{merged['display_name']}' {msg}"
+                        for msg in _check_sales_amount_columns(sales_files)
+                    ]
+                )
                 inv = system_raw / merged["inventory_file"]
                 if not inv.exists():
                     errors.append(
@@ -171,8 +170,7 @@ def _check_config_and_paths() -> list[str]:
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"sales auto-scan preflight failed: {exc}")
                 sales_candidates = []
-        if bool(config.get("enable_ranked_store_transfer_summary", False)):
-            errors.extend(_check_sales_amount_columns(sales_candidates))
+        errors.extend(_check_sales_amount_columns(sales_candidates))
 
     return errors
 

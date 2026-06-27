@@ -16,6 +16,7 @@ def apply_recommendation_columns(
     """补充缺货、补货、调出建议列，并处理零销量积压库存。"""
     detail = detail.copy()
     detail["out_of_stock"] = np.where((detail["forecast_daily_sales"] > 0) & (detail["inventory_qty"] == 0), "是", "否")
+    detail["risk_level"] = np.where(detail["out_of_stock"] == "是", "缺货", detail["risk_level"])
     detail["daily_demand"] = detail["forecast_daily_sales"]
     detail["low_target_qty"] = detail["daily_demand"] * low_days
     detail["high_keep_qty"] = detail["daily_demand"] * high_days

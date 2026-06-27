@@ -493,7 +493,7 @@ def test_missing_sku_name_fallback_only_applies_for_unique_candidate():
             "近30天平均日销售": [1.0, 2.0],
             "库存数量": [0, 0],
             "缺货": ["是", "是"],
-            "风险等级": ["高", "高"],
+            "风险等级": ["缺货", "缺货"],
             "建议调出数量": [0, 0],
             "建议补货数量": [6, 9],
         }
@@ -839,19 +839,18 @@ def test_report_fails_when_sales_amount_column_missing(tmp_path: Path):
     data_dir = tmp_path / "data"
     reports_dir = tmp_path / "reports"
 
-    _write_excel(
-        pd.DataFrame(
-            {
-                "门店名称": ["门店A"],
-                "品牌": ["品牌T"],
-                "商品名称": ["SKU1"],
-                "商品条码": ["6902111111111"],
-                "销售数量": [10],
-                "销售时间": ["2026-02-08"],
-            }
-        ),
-        system_dir / "销售202602.xlsx",
-    )
+    sales_file = system_dir / "销售202602.xlsx"
+    sales_file.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "门店名称": ["门店A"],
+            "品牌": ["品牌T"],
+            "商品名称": ["SKU1"],
+            "商品条码": ["6902111111111"],
+            "销售数量": [10],
+            "销售时间": ["2026-02-08"],
+        }
+    ).to_excel(sales_file, index=False)
     _write_excel(
         pd.DataFrame(
             {
@@ -894,7 +893,7 @@ def test_report_fails_when_sales_amount_column_missing(tmp_path: Path):
         "sales_window_recent_days": 30,
         "season_mode": False,
         "strict_auto_scan": False,
-        "enable_ranked_store_transfer_summary": True,
+        "enable_ranked_store_transfer_summary": False,
         "brand_keywords": ["品牌T"],
         "sales_date_dayfirst": False,
         "sales_date_format": "",

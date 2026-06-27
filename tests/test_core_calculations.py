@@ -667,6 +667,7 @@ class CoreCalculationsTest(unittest.TestCase):
                 "daily_sales_3m_mtd",
                 "daily_sales_30d",
                 "inventory_qty",
+                "inventory_amount",
                 "out_of_stock",
                 "risk_level",
                 "inventory_sales_ratio",
@@ -748,8 +749,9 @@ class CoreCalculationsTest(unittest.TestCase):
                 "daily_sales_3m_mtd": [0.1],
                 "daily_sales_30d": [0.1],
                 "inventory_qty": [0],
+                "inventory_amount": [0.0],
                 "out_of_stock": ["是"],
-                "risk_level": ["低"],
+                "risk_level": ["缺货"],
                 "inventory_sales_ratio": [0.0],
                 "turnover_rate": [0.0],
                 "turnover_days": [0.0],
@@ -999,6 +1001,57 @@ class CoreCalculationsTest(unittest.TestCase):
         self.assertEqual(len(missing_sales), 0)
         self.assertEqual(len(store_summary), 1)
         self.assertGreaterEqual(len(brand_summary), 1)
+
+    def test_store_and_brand_summary_include_missing_inventory_skus(self):
+        sales_df = pd.DataFrame(
+            {
+                "store": ["门店A"],
+                "store_code": ["S1"],
+                "brand": ["品牌A"],
+                "product": ["缺失库存SKU"],
+                "barcode": ["6901"],
+                "product_code": ["P1"],
+                "display_barcode": ["6901"],
+                "sales_qty": [9],
+                "sales_date": pd.to_datetime(["2026-02-09"]),
+                "supplier_card": [None],
+            }
+        )
+        inv_df = pd.DataFrame(
+            {
+                "store": ["门店A"],
+                "store_code": ["S1"],
+                "brand": ["品牌B"],
+                "product": ["库存SKU"],
+                "barcode": ["6902"],
+                "product_code": ["P2"],
+                "inventory_qty": [5],
+                "supplier_card": [None],
+            }
+        )
+
+        detail, missing_sales, store_summary, brand_summary, _ = core_matching.build_detail_with_matching(
+            sales_df=sales_df,
+            inv_df=inv_df,
+            mtd_start=pd.Timestamp("2026-02-01"),
+            mtd_end=pd.Timestamp("2026-02-09"),
+            recent_start=pd.Timestamp("2026-01-11"),
+            inventory_date_ts=pd.Timestamp("2026-02-09"),
+            mtd_days=9,
+            recent_days_effective=30,
+            has_mtd_window_data=True,
+            has_recent_window_data=True,
+            use_peak_mode=False,
+            low_days=45,
+            high_days=60,
+            is_wumei_system=False,
+            province_mapper=lambda _: "其他/未知",
+        )
+
+        self.assertEqual(len(missing_sales), 1)
+        self.assertEqual(len(detail), 2)
+        self.assertEqual(float(store_summary.loc[store_summary["store"] == "门店A", "daily_sales_3m_mtd"].iloc[0]), 1.0)
+        self.assertEqual(float(brand_summary.loc[brand_summary["brand"] == "品牌A", "daily_sales_3m_mtd"].iloc[0]), 1.0)
 
     def test_matching_tie_break_is_stable_for_same_day_records(self):
         sales_df = pd.DataFrame(

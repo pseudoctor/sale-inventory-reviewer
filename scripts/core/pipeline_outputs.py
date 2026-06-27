@@ -118,6 +118,7 @@ def build_summary_frame(
 ) -> pd.DataFrame:
     """构建报表核心指标汇总。"""
     summary_rows = [
+        ["风险等级-缺货", int((detail_out["风险等级"] == "缺货").sum())],
         ["风险等级-高", int((detail_out["风险等级"] == "高").sum())],
         ["风险等级-中", int((detail_out["风险等级"] == "中").sum())],
         ["风险等级-低", int((detail_out["风险等级"] == "低").sum())],

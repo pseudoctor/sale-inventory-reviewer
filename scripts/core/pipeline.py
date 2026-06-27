@@ -135,7 +135,7 @@ def _prepare_input_stage(ctx: ReportRunContext) -> InputStageResult:
             ctx.brand_keywords or [],
             ctx.sales_date_format,
             ctx.sales_date_dayfirst,
-            ctx.enable_ranked_store_transfer_summary,
+            True,
         )
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, RuntimeError) and str(exc).startswith("[input_read]"):

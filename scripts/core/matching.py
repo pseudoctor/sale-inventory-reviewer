@@ -282,16 +282,6 @@ def build_detail_with_matching(
         "name_conflict_count", "brand_conflict_count",
     ]].sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
 
-    store_summary = detail.groupby("store", as_index=False).agg({
-        "daily_sales_3m_mtd": "sum", "daily_sales_30d": "sum", "forecast_daily_sales": "sum", "inventory_qty": "sum"
-    })
-    store_summary = core_metrics.apply_inventory_metrics(store_summary, low_days, high_days)
-
-    brand_summary = detail.groupby("brand", as_index=False).agg({
-        "daily_sales_3m_mtd": "sum", "daily_sales_30d": "sum", "forecast_daily_sales": "sum", "inventory_qty": "sum"
-    })
-    brand_summary = core_metrics.apply_inventory_metrics(brand_summary, low_days, high_days)
-
     missing_sales = sales_totals.merge(
         inv_totals[["store_key", "product_key"]]
         .dropna(subset=["product_key"])
@@ -341,6 +331,16 @@ def build_detail_with_matching(
         detail = pd.concat([detail, missing_detail], ignore_index=True)
 
     detail = detail.sort_values(["store", "brand", "product", "barcode"]).reset_index(drop=True)
+    store_summary = detail.groupby("store", as_index=False).agg({
+        "daily_sales_3m_mtd": "sum", "daily_sales_30d": "sum", "forecast_daily_sales": "sum", "inventory_qty": "sum"
+    })
+    store_summary = core_metrics.apply_inventory_metrics(store_summary, low_days, high_days)
+
+    brand_summary = detail.groupby("brand", as_index=False).agg({
+        "daily_sales_3m_mtd": "sum", "daily_sales_30d": "sum", "forecast_daily_sales": "sum", "inventory_qty": "sum"
+    })
+    brand_summary = core_metrics.apply_inventory_metrics(brand_summary, low_days, high_days)
+
     mapping_stats = {
         "duplicate_store_product_keys": int((sales_mapping["record_rows"] > 1).sum()),
         "name_conflict_keys": int((sales_mapping["name_conflict_count"] > 1).sum()),

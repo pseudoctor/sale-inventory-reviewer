@@ -76,6 +76,7 @@ def build_style_context() -> Dict[str, object]:
         "center": Alignment(horizontal="center", vertical="center"),
         "left": Alignment(horizontal="left", vertical="center"),
         "risk_fills": {
+            "缺货": PatternFill(start_color="7F1D1D", end_color="7F1D1D", fill_type="solid"),
             "高": PatternFill(start_color="D92D20", end_color="D92D20", fill_type="solid"),
             "中": PatternFill(start_color="F79009", end_color="F79009", fill_type="solid"),
             "低": PatternFill(start_color="10B981", end_color="10B981", fill_type="solid"),

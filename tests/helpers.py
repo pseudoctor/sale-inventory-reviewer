@@ -51,6 +51,9 @@ BASE_BATCH_CONFIG: Dict[str, Any] = {
 
 
 def write_excel(df: pd.DataFrame, path: Path) -> None:
+    df = df.copy()
+    if {"销售数量", "销售时间"}.issubset(df.columns) and "销售金额" not in df.columns:
+        df["销售金额"] = df["销售数量"]
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_excel(path, index=False)
 

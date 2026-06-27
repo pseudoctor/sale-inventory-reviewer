@@ -56,7 +56,7 @@ def load_sales_data(
         df, store_col, brand_col, product_col, barcode_col, qty_col, date_col, supplier_card_col = core_io.normalize_sales_df(df)
         store_code_col = core_io.find_column(df.columns.tolist(), ["门店编码", "store_code"])
         sales_amount_col = core_io.find_sales_amount_column(df.columns.tolist())
-        # 门店销量排名调货汇总依赖销售额口径，启用该功能时缺失直接失败，避免静默生成错误结果。
+        # 明细库存金额和门店销量排名调货汇总都依赖销售额口径，缺失时直接失败，避免静默生成错误金额。
         if require_sales_amount and sales_amount_col is None:
             raise ValueError(
                 f"Missing required sales amount column in sales file: {filepath.name} "
