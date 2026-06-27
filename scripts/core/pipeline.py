@@ -221,6 +221,12 @@ def _build_analysis_stage(ctx: ReportRunContext, inputs: InputStageResult) -> An
         ctx.stagnant_outbound_mode,
         ctx.stagnant_min_keep_qty,
     )
+    detail = core_pipeline_transfer.attach_inventory_amount(
+        detail,
+        inputs.sales_df,
+        window_ctx.mtd_start,
+        ctx.inventory_date_ts,
+    )
 
     product_code_catalog = core_pipeline_outputs.build_product_code_catalog(inputs.sales_df, inputs.inventory_df)
     frames = core_output_tables.build_report_frames(

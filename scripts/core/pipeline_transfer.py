@@ -53,16 +53,13 @@ def apply_recommendation_columns(
     return detail
 
 
-def build_store_sales_ranking_transfer_frame(
+def attach_inventory_amount(
     detail: pd.DataFrame,
     sales_df: pd.DataFrame,
     sales_amount_start: pd.Timestamp,
     sales_amount_end: pd.Timestamp,
-    sales_amount_range_label: str,
+    keep_price_details: bool = False,
 ) -> pd.DataFrame:
-    """基于当前明细和销售额，生成带时间区间的门店销量排名调货汇总页。"""
-    store_amount_header = f"门店销售额总计({sales_amount_range_label})"
-    item_amount_header = f"商品销售额({sales_amount_range_label})"
     sales_base = sales_df[
         (sales_df["sales_date"] >= sales_amount_start) & (sales_df["sales_date"] <= sales_amount_end)
     ].copy()
@@ -72,11 +69,6 @@ def build_store_sales_ranking_transfer_frame(
     sales_base["barcode_key"] = sales_base["barcode"].apply(core_io.normalize_barcode_value)
     sales_base["product_key"] = sales_base["product_key"].where(sales_base["product_key"].notna(), sales_base["barcode_key"])
 
-    store_amounts = (
-        sales_base.groupby(["store_key"], as_index=False)["sales_amount"]
-        .sum()
-        .rename(columns={"sales_amount": "store_sales_amount"})
-    )
     item_amounts = (
         sales_base.groupby(["store_key", "product_key"], as_index=False)["sales_amount"]
         .sum()
@@ -110,46 +102,76 @@ def build_store_sales_ranking_transfer_frame(
         .rename(columns={"sales_qty": "current_store_all_sales_qty"})
     )
 
-    transfer = detail.copy()
-    transfer = transfer.merge(store_amounts, on=["store_key"], how="left")
-    transfer = transfer.merge(item_amounts, on=["store_key", "product_key"], how="left")
-    transfer = transfer.merge(item_sales_qty, on=["store_key", "product_key"], how="left")
-    transfer = transfer.merge(global_item_amounts, on=["product_key"], how="left")
-    transfer = transfer.merge(global_item_sales_qty, on=["product_key"], how="left")
-    transfer = transfer.merge(current_store_all_amounts, on=["store_key", "product_key"], how="left")
-    transfer = transfer.merge(current_store_all_qty, on=["store_key", "product_key"], how="left")
-    transfer["store_sales_amount"] = pd.to_numeric(transfer["store_sales_amount"], errors="coerce").fillna(0.0)
-    transfer["item_sales_amount"] = pd.to_numeric(transfer["item_sales_amount"], errors="coerce").fillna(0.0)
-    transfer["item_sales_qty"] = pd.to_numeric(transfer["item_sales_qty"], errors="coerce").fillna(0.0)
-    transfer["global_item_sales_amount"] = pd.to_numeric(transfer["global_item_sales_amount"], errors="coerce").fillna(0.0)
-    transfer["global_item_sales_qty"] = pd.to_numeric(transfer["global_item_sales_qty"], errors="coerce").fillna(0.0)
-    transfer["current_store_all_sales_amount"] = pd.to_numeric(transfer["current_store_all_sales_amount"], errors="coerce").fillna(0.0)
-    transfer["current_store_all_sales_qty"] = pd.to_numeric(transfer["current_store_all_sales_qty"], errors="coerce").fillna(0.0)
-    transfer["unit_price"] = np.where(
-        transfer["item_sales_qty"] > 0,
-        transfer["item_sales_amount"] / transfer["item_sales_qty"],
+    out = detail.copy()
+    out = out.merge(item_amounts, on=["store_key", "product_key"], how="left")
+    out = out.merge(item_sales_qty, on=["store_key", "product_key"], how="left")
+    out = out.merge(global_item_amounts, on=["product_key"], how="left")
+    out = out.merge(global_item_sales_qty, on=["product_key"], how="left")
+    out = out.merge(current_store_all_amounts, on=["store_key", "product_key"], how="left")
+    out = out.merge(current_store_all_qty, on=["store_key", "product_key"], how="left")
+    out["item_sales_amount"] = pd.to_numeric(out["item_sales_amount"], errors="coerce").fillna(0.0)
+    out["item_sales_qty"] = pd.to_numeric(out["item_sales_qty"], errors="coerce").fillna(0.0)
+    out["global_item_sales_amount"] = pd.to_numeric(out["global_item_sales_amount"], errors="coerce").fillna(0.0)
+    out["global_item_sales_qty"] = pd.to_numeric(out["global_item_sales_qty"], errors="coerce").fillna(0.0)
+    out["current_store_all_sales_amount"] = pd.to_numeric(out["current_store_all_sales_amount"], errors="coerce").fillna(0.0)
+    out["current_store_all_sales_qty"] = pd.to_numeric(out["current_store_all_sales_qty"], errors="coerce").fillna(0.0)
+    out["unit_price"] = np.where(
+        out["item_sales_qty"] > 0,
+        out["item_sales_amount"] / out["item_sales_qty"],
         0.0,
     )
-    transfer["other_store_sales_amount"] = np.maximum(
+    out["other_store_sales_amount"] = np.maximum(
         0.0,
-        transfer["global_item_sales_amount"] - transfer["current_store_all_sales_amount"],
+        out["global_item_sales_amount"] - out["current_store_all_sales_amount"],
     )
-    transfer["other_store_sales_qty"] = np.maximum(
+    out["other_store_sales_qty"] = np.maximum(
         0.0,
-        transfer["global_item_sales_qty"] - transfer["current_store_all_sales_qty"],
+        out["global_item_sales_qty"] - out["current_store_all_sales_qty"],
     )
-    transfer["fallback_unit_price"] = np.where(
-        transfer["other_store_sales_qty"] > 0,
-        transfer["other_store_sales_amount"] / transfer["other_store_sales_qty"],
+    out["fallback_unit_price"] = np.where(
+        out["other_store_sales_qty"] > 0,
+        out["other_store_sales_amount"] / out["other_store_sales_qty"],
         0.0,
     )
     # 当前门店窗口内没有销量时，回退到其它门店该商品的平均单价。
-    transfer["unit_price"] = np.where(
-        transfer["unit_price"] > 0,
-        transfer["unit_price"],
-        transfer["fallback_unit_price"],
+    out["unit_price"] = np.where(
+        out["unit_price"] > 0,
+        out["unit_price"],
+        out["fallback_unit_price"],
     )
-    transfer["inventory_amount"] = transfer["unit_price"] * pd.to_numeric(transfer["inventory_qty"], errors="coerce").fillna(0.0)
+    out["inventory_amount"] = out["unit_price"] * pd.to_numeric(out["inventory_qty"], errors="coerce").fillna(0.0)
+    if keep_price_details:
+        return out
+    return out[list(detail.columns) + ["inventory_amount"]]
+
+
+def build_store_sales_ranking_transfer_frame(
+    detail: pd.DataFrame,
+    sales_df: pd.DataFrame,
+    sales_amount_start: pd.Timestamp,
+    sales_amount_end: pd.Timestamp,
+    sales_amount_range_label: str,
+) -> pd.DataFrame:
+    """基于当前明细和销售额，生成带时间区间的门店销量排名调货汇总页。"""
+    store_amount_header = f"门店销售额总计({sales_amount_range_label})"
+    item_amount_header = f"商品销售额({sales_amount_range_label})"
+    sales_base = sales_df[
+        (sales_df["sales_date"] >= sales_amount_start) & (sales_df["sales_date"] <= sales_amount_end)
+    ].copy()
+    sales_base["store_key"] = sales_base.get("store_code", pd.Series(index=sales_base.index)).apply(core_io.normalize_barcode_value)
+    sales_base["store_key"] = sales_base["store_key"].where(sales_base["store_key"].notna(), sales_base["store"])
+    sales_base["product_key"] = sales_base.get("product_code", pd.Series(index=sales_base.index)).apply(core_io.normalize_barcode_value)
+    sales_base["barcode_key"] = sales_base["barcode"].apply(core_io.normalize_barcode_value)
+    sales_base["product_key"] = sales_base["product_key"].where(sales_base["product_key"].notna(), sales_base["barcode_key"])
+
+    store_amounts = (
+        sales_base.groupby(["store_key"], as_index=False)["sales_amount"]
+        .sum()
+        .rename(columns={"sales_amount": "store_sales_amount"})
+    )
+    transfer = attach_inventory_amount(detail, sales_df, sales_amount_start, sales_amount_end, keep_price_details=True)
+    transfer = transfer.merge(store_amounts, on=["store_key"], how="left")
+    transfer["store_sales_amount"] = pd.to_numeric(transfer["store_sales_amount"], errors="coerce").fillna(0.0)
 
     zero_mtd_full_outbound_mask = (
         (pd.to_numeric(transfer["daily_sales_3m_mtd"], errors="coerce").fillna(0.0) == 0)

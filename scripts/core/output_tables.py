@@ -101,6 +101,7 @@ def _build_summary_frames(
             "daily_sales_3m_mtd": "近三月+本月迄今平均日销",
             "daily_sales_30d": "近30天平均日销售",
             "inventory_qty": "库存数量",
+            "inventory_amount": "库存金额",
             "out_of_stock": "缺货",
             "risk_level": "风险等级",
             "inventory_sales_ratio": "库存/销售比",
